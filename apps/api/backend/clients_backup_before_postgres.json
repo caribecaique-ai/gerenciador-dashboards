@@ -1,0 +1,32 @@
+﻿[
+    {
+        "id":  "cmlqwogtb0003i8pbdu5hnsvm",
+        "name":  "Anna Julia",
+        "clickupToken":  "pk_111936419_835KFN89GU5T8XQ5AH4S8NWSJCEL5NUB",
+        "clickupTeamId":  "90132715669",
+        "status":  "Connected",
+        "dashboardSlug":  "anna-julia",
+        "createdAt":  "2026-02-17T17:57:28.992Z",
+        "updatedAt":  "2026-02-18T06:47:10.886Z"
+    },
+    {
+        "id":  "cmlqwcm3i0002i8pbgisz7xb6",
+        "name":  "Stev",
+        "clickupToken":  "pk_72686020_WT8BX7WIQ3T22MZJ0IED1IEE8RXBY9F2",
+        "clickupTeamId":  "9013398379",
+        "status":  "Connected",
+        "dashboardSlug":  "stev",
+        "createdAt":  "2026-02-17T17:48:15.967Z",
+        "updatedAt":  "2026-02-18T06:46:35.435Z"
+    },
+    {
+        "id":  "cmlqw06pw0001i8pbauxkwtm5",
+        "name":  "Caique",
+        "clickupToken":  "pk_111941740_TC43IEFI1VG03CCZE4KHJ420IA1TZ4ZI",
+        "clickupTeamId":  "90132715669",
+        "status":  "Connected",
+        "dashboardSlug":  "caique",
+        "createdAt":  "2026-02-17T17:38:36.163Z",
+        "updatedAt":  "2026-02-18T06:46:40.810Z"
+    }
+]

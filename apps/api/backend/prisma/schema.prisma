@@ -1,0 +1,35 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Client {
+  id              String   @id @default(cuid())
+  name            String
+  clickupToken    String   @unique
+  clickupTeamId   String?
+  status          String   @default("Not Connected")
+  dashboardSlug   String   @unique
+  alertEnabled    Boolean  @default(false)
+  alertChannel    String?
+  alertTarget     String?
+  webhookUrl      String?
+  autoRecover     Boolean  @default(true)
+  lastAlertAt     DateTime?
+  lastCheckAt     DateTime?
+  lastSuccessAt   DateTime?
+  lastFailureAt   DateTime?
+  lastLatencyMs   Int?
+  consecutiveFailures Int  @default(0)
+  successCount    Int      @default(0)
+  failureCount    Int      @default(0)
+  lastError       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("clients")
+}

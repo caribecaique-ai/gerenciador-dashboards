@@ -1,0 +1,42 @@
+{
+    "name": "api",
+    "version": "1.0.0",
+    "private": true,
+    "scripts": {
+        "build": "nest build",
+        "start": "nest start",
+        "dev": "nest start --watch",
+        "migrate:dev": "prisma migrate dev",
+        "seed": "ts-node prisma/seed.ts"
+    },
+    "dependencies": {
+        "@nestjs/common": "^10.0.0",
+        "@nestjs/core": "^10.0.0",
+        "@nestjs/platform-express": "^10.0.0",
+        "@nestjs/platform-socket.io": "^10.0.0",
+        "@nestjs/swagger": "^7.0.0",
+        "@nestjs/websockets": "^10.0.0",
+        "@prisma/client": "^5.0.0",
+        "bullmq": "^4.0.0",
+        "ioredis": "^5.3.0",
+        "socket.io": "^4.7.0",
+        "zod": "^3.22.0",
+        "class-validator": "^0.14.0",
+        "class-transformer": "^0.5.1",
+        "jsonwebtoken": "^9.0.0",
+        "bcryptjs": "^2.4.3",
+        "helmet": "^7.0.0",
+        "winston": "^3.10.0",
+        "nest-winston": "^1.9.3",
+        "@dashboard/shared": "*"
+    },
+    "devDependencies": {
+        "@nestjs/cli": "^10.0.0",
+        "@nestjs/testing": "^10.0.0",
+        "@types/express": "^4.17.17",
+        "@types/node": "^20.0.0",
+        "prisma": "^5.0.0",
+        "ts-node": "^10.9.1",
+        "typescript": "^5.1.3"
+    }
+}

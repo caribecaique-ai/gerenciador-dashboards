@@ -1,0 +1,199 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  OPS
+  SALES
+  VIEWER
+}
+
+enum ClientStatus {
+  ACTIVE
+  PAUSED
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users               User[]
+  clients             Client[]
+  connections         ClickUpConnection[]
+  alertRules          AlertRule[]
+  alertEvents         AlertEvent[]
+  auditLogs           AuditLog[]
+  dashboardInstances  DashboardInstance[]
+  usageEvents         UsageEvent[]
+  syncJobs            SyncJobRun[]
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String
+  role      Role     @default(VIEWER)
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  auditLogs AuditLog[]
+}
+
+model Client {
+  id                 String       @id @default(cuid())
+  name               String
+  status             ClientStatus @default(ACTIVE)
+  tags               String[]
+  clickupWorkspaceId String?
+  tenantId           String
+  tenant             Tenant       @relation(fields: [tenantId], references: [id])
+  lastSyncOk         DateTime?
+  lastSeenAt         DateTime?
+  syncDelayMin       Int          @default(0)
+  leadScore          Int          @default(0)
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  connections        ClickUpConnection[]
+  dashboards         DashboardInstance[]
+  heartbeats         HealthHeartbeat[]
+  metrics            MetricTimeseries[]
+  syncJobs           SyncJobRun[]
+  usageEvents        UsageEvent[]
+  alertEvents        AlertEvent[]
+
+  @@index([tenantId, createdAt])
+}
+
+model ClickUpConnection {
+  id           String   @id @default(cuid())
+  accessToken  String
+  refreshToken String?
+  expiresAt    DateTime?
+  scopes       String[]
+  workspaceId  String?
+  status       String   @default("active")
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id])
+  clientId     String?
+  client       Client?  @relation(fields: [clientId], references: [id])
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model DashboardInstance {
+  id             String   @id @default(cuid())
+  token          String   @unique
+  passwordHash   String?
+  allowlistIps   String[]
+  expiresAt      DateTime?
+  config         Json?
+  clientId       String
+  client         Client   @relation(fields: [clientId], references: [id])
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id])
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model HealthHeartbeat {
+  id        String   @id @default(cuid())
+  latency   Int
+  errors    Int      @default(0)
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id])
+  createdAt DateTime @default(now())
+}
+
+model MetricTimeseries {
+  id        String   @id @default(cuid())
+  name      String   // latency, error_rate, load_time
+  value     Float
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@index([clientId, createdAt])
+}
+
+model SyncJobRun {
+  id           String    @id @default(cuid())
+  status       JobStatus @default(PENDING)
+  durationMs   Int?
+  itemsFetched Int       @default(0)
+  errors       Json?
+  clientId     String
+  client       Client    @relation(fields: [clientId], references: [id])
+  tenantId     String
+  tenant       Tenant    @relation(fields: [tenantId], references: [id])
+  createdAt    DateTime  @default(now())
+  finishedAt   DateTime?
+}
+
+model UsageEvent {
+  id        String   @id @default(cuid())
+  type      String   // pageview, session_start, interaction
+  data      Json?
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id])
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@index([clientId, createdAt])
+}
+
+model AlertRule {
+  id        String   @id @default(cuid())
+  name      String
+  condition Json
+  enabled   Boolean  @default(true)
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model AlertEvent {
+  id        String   @id @default(cuid())
+  type      String
+  message   String
+  clientId  String?
+  client    Client?  @relation(fields: [clientId], references: [id])
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  createdAt DateTime @default(now())
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  action     String
+  targetType String
+  targetId   String?
+  diff       Json?
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+}
