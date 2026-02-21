@@ -17,36 +17,48 @@ import {
 } from 'lucide-react';
 import { ClientRowSkeleton } from './components/Skeleton';
 
-function resolveManagerApiUrl(): string {
-  const envValue = String(import.meta.env.VITE_API_URL || '').trim();
-  if (envValue) return envValue;
+function isLocalHostname(value: string): boolean {
+  const normalized = String(value || '').toLowerCase();
+  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1' || normalized === '[::1]';
+}
 
+function resolveHostAwareApiUrl(
+  envValue: string | undefined,
+  fallbackPort: string,
+  fallbackPath: string
+): string {
   if (typeof window === 'undefined') {
-    return 'http://localhost:3005/api';
+    return (envValue || `http://localhost:${fallbackPort}${fallbackPath}`).trim();
   }
 
-  const current = new URL(window.location.href);
-  current.port = '3005';
-  current.pathname = '/api';
-  current.search = '';
-  current.hash = '';
-  return current.toString().replace(/\/+$/, '');
+  const browserHost = window.location.hostname;
+  const browserIsLocal = isLocalHostname(browserHost);
+  const defaultUrl = `http://${browserHost}:${fallbackPort}${fallbackPath}`;
+  const raw = String(envValue || '').trim();
+  if (!raw) return defaultUrl;
+
+  try {
+    const parsed = new URL(raw);
+    const envIsLocal = isLocalHostname(parsed.hostname);
+    if (!browserIsLocal && envIsLocal) {
+      parsed.protocol = 'http:';
+      parsed.hostname = browserHost;
+      parsed.port = parsed.port || fallbackPort;
+      if (!parsed.pathname || parsed.pathname === '/') parsed.pathname = fallbackPath;
+      return parsed.toString().replace(/\/+$/, '');
+    }
+    return parsed.toString().replace(/\/+$/, '');
+  } catch {
+    return raw;
+  }
+}
+
+function resolveManagerApiUrl(): string {
+  return resolveHostAwareApiUrl(import.meta.env.VITE_API_URL, '3005', '/api');
 }
 
 function resolvePrimaryDashboardApiUrl(): string {
-  const envValue = String(import.meta.env.VITE_PRIMARY_DASHBOARD_API_URL || '').trim();
-  if (envValue) return envValue.replace(/\/+$/, '');
-
-  if (typeof window === 'undefined') {
-    return 'http://localhost:3001/api';
-  }
-
-  const current = new URL(window.location.href);
-  current.port = '3001';
-  current.pathname = '/api';
-  current.search = '';
-  current.hash = '';
-  return current.toString().replace(/\/+$/, '');
+  return resolveHostAwareApiUrl(import.meta.env.VITE_PRIMARY_DASHBOARD_API_URL, '3001', '/api');
 }
 
 const API_URL = resolveManagerApiUrl();
@@ -65,17 +77,32 @@ const MANAGER_POLL_MS = resolvePollInterval(import.meta.env.VITE_MANAGER_POLL_MS
 const VIEWER_POLL_MS = resolvePollInterval(import.meta.env.VITE_VIEWER_POLL_MS, 10000);
 
 function resolvePrimaryDashboardBaseUrl(): string {
-  const envValue = import.meta.env.VITE_PRIMARY_DASHBOARD_URL;
-  if (envValue) {
-    return envValue;
+  if (typeof window === 'undefined') {
+    return (import.meta.env.VITE_PRIMARY_DASHBOARD_URL || 'http://localhost:5173/').trim();
   }
 
-  if (typeof window === 'undefined') {
-    return 'http://localhost:5173/';
+  const envValue = String(import.meta.env.VITE_PRIMARY_DASHBOARD_URL || '').trim();
+  const browserHost = window.location.hostname;
+  const browserIsLocal = isLocalHostname(browserHost);
+  const preferredPort = String(import.meta.env.VITE_PRIMARY_DASHBOARD_PORT || '5173').trim() || '5173';
+
+  if (envValue) {
+    try {
+      const parsed = new URL(envValue);
+      if (!browserIsLocal && isLocalHostname(parsed.hostname)) {
+        parsed.protocol = 'http:';
+        parsed.hostname = browserHost;
+        parsed.port = preferredPort;
+      }
+      return parsed.toString();
+    } catch {
+      return envValue;
+    }
   }
 
   const current = new URL(window.location.href);
-  current.port = '5173';
+  current.protocol = 'http:';
+  current.port = preferredPort;
   current.pathname = '/';
   current.search = '';
   current.hash = '';
@@ -119,51 +146,59 @@ interface Client {
   health?: ClientHealthSnapshot;
 }
 
-function isLoopbackHostname(hostname: string): boolean {
-  const normalized = String(hostname || '').trim().toLowerCase();
-  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1';
-}
+function extractTokenFromRawValue(rawValue: string | null | undefined): string | null {
+  if (!rawValue) return null;
+  let candidate = String(rawValue).replace(/^Bearer\s+/i, '').trim();
+  if (!candidate) return null;
 
-function buildPrimaryDashboardUrl(client: Pick<Client, 'clickupToken' | 'clickupTeamId' | 'dashboardUrl'>): string {
-  const base = new URL(PRIMARY_DASHBOARD_URL, window.location.origin);
-
-  if (client.dashboardUrl) {
+  if (/^https?:\/\//i.test(candidate)) {
     try {
-      const normalized = new URL(client.dashboardUrl, base);
-      const normalizedUsesManagerPort = normalized.port === '3005' || normalized.port === '3010';
-      const shouldSwapHost =
-        normalizedUsesManagerPort ||
-        (isLoopbackHostname(normalized.hostname) && !isLoopbackHostname(base.hostname));
-
-      if (shouldSwapHost) {
-        normalized.protocol = base.protocol;
-        normalized.hostname = base.hostname;
-        normalized.port = base.port;
-      }
-
-      normalized.pathname = '/';
-      normalized.search = '';
-      normalized.hash = '';
-      normalized.searchParams.set('token', client.clickupToken);
-      if (client.clickupTeamId) normalized.searchParams.set('teamId', client.clickupTeamId);
-      else normalized.searchParams.delete('teamId');
-
-      return normalized.toString();
+      const parsed = new URL(candidate);
+      candidate = String(parsed.searchParams.get('token') || parsed.searchParams.get('access_token') || '').replace(/^Bearer\s+/i, '').trim();
     } catch {
-      // Fallback below if dashboardUrl is malformed.
+      return null;
     }
   }
 
-  base.searchParams.set('token', client.clickupToken);
-  if (client.clickupTeamId) base.searchParams.set('teamId', client.clickupTeamId);
-  else base.searchParams.delete('teamId');
+  if (!candidate) return null;
+  if (candidate.includes('://') || /[/?&=]/.test(candidate)) return null;
+  if (!/^[A-Za-z0-9._-]{16,}$/.test(candidate)) return null;
+  return candidate;
+}
+
+function hasValidClickupToken(rawValue: string | null | undefined): boolean {
+  return Boolean(extractTokenFromRawValue(rawValue));
+}
+
+function buildPrimaryDashboardUrl(client: Pick<Client, 'clickupToken' | 'clickupTeamId' | 'dashboardUrl'>): string | null {
+  let token = extractTokenFromRawValue(client.clickupToken);
+  if (!token && client.dashboardUrl) {
+    try {
+      const parsed = new URL(client.dashboardUrl);
+      token = extractTokenFromRawValue(parsed.searchParams.get('token'));
+    } catch {
+      token = null;
+    }
+  }
+  if (!token) return null;
+
+  const base = new URL(PRIMARY_DASHBOARD_URL, window.location.origin);
+  base.searchParams.set('token', token);
+
+  if (client.clickupTeamId) {
+    base.searchParams.set('teamId', client.clickupTeamId);
+  } else {
+    base.searchParams.delete('teamId');
+  }
 
   return base.toString();
 }
 
 function prefetchPrimaryDashboard(client: Pick<Client, 'clickupToken' | 'clickupTeamId'>): void {
+  const token = extractTokenFromRawValue(client.clickupToken);
+  if (!token) return;
   const warmupUrl = new URL(`${PRIMARY_DASHBOARD_API_URL}/dashboard`);
-  warmupUrl.searchParams.set('token', client.clickupToken);
+  warmupUrl.searchParams.set('token', token);
 
   if (client.clickupTeamId) {
     warmupUrl.searchParams.set('teamId', client.clickupTeamId);
@@ -233,7 +268,7 @@ function parseDashboardAccessFromUrl(): DashboardAccess | null {
     return { slug };
   }
 
-  if (token) {
+  if (token && hasValidClickupToken(token)) {
     return { token, teamId: teamId || undefined };
   }
 
@@ -747,10 +782,17 @@ function ManagerPage({ onOpenViewer }: { onOpenViewer: (url: string) => void }) 
     setError(null);
     setSuccess(null);
 
+    const normalizedToken = extractTokenFromRawValue(form.clickupToken);
+    if (!normalizedToken) {
+      setError('Token ClickUp invalido. Cole o token (pk_...) ou uma URL que contenha ?token=pk_...');
+      setIsAdding(false);
+      return;
+    }
+
     try {
       const response = await axios.post<Client>(`${API_URL}/clients`, {
         name: form.name,
-        clickupToken: form.clickupToken,
+        clickupToken: normalizedToken,
         dashboardSlug: form.dashboardSlug || undefined,
       });
       setForm({ name: '', clickupToken: '', dashboardSlug: '' });
@@ -842,7 +884,14 @@ function ManagerPage({ onOpenViewer }: { onOpenViewer: (url: string) => void }) 
       return;
     }
 
-    const copied = await copyToClipboard(buildPrimaryDashboardUrl(selectedClient));
+    const dashboardUrl = buildPrimaryDashboardUrl(selectedClient);
+    if (!dashboardUrl) {
+      setSuccess(null);
+      setError('Token do cliente invalido. Corrija o token ClickUp para gerar a URL.');
+      return;
+    }
+
+    const copied = await copyToClipboard(dashboardUrl);
     if (copied) {
       setError(null);
       setSuccess('URL copiada para a area de transferencia.');
@@ -1143,6 +1192,7 @@ function ManagerPage({ onOpenViewer }: { onOpenViewer: (url: string) => void }) 
                   pagedClients.map((client) => {
                     const chip = statusChip(client.status);
                     const isSelected = selectedClient?.id === client.id;
+                    const dashboardUrl = buildPrimaryDashboardUrl(client);
                     return (
                       <tr
                         key={client.id}
@@ -1164,17 +1214,21 @@ function ManagerPage({ onOpenViewer }: { onOpenViewer: (url: string) => void }) 
                           {client.status === 'Connected' ? formatDateTime(client.updatedAt) : '--'}
                         </td>
                         <td className="px-6 py-5">
-                          <a
-                            className="break-all text-sm text-blue-700 underline underline-offset-4"
-                            href={buildPrimaryDashboardUrl(client)}
-                            onClick={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              onOpenViewer(buildPrimaryDashboardUrl(client));
-                            }}
-                          >
-                            {buildPrimaryDashboardUrl(client)}
-                          </a>
+                          {dashboardUrl ? (
+                            <a
+                              className="break-all text-sm text-blue-700 underline underline-offset-4"
+                              href={dashboardUrl}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                onOpenViewer(dashboardUrl);
+                              }}
+                            >
+                              {dashboardUrl}
+                            </a>
+                          ) : (
+                            <span className="text-sm text-slate-500">Token invalido</span>
+                          )}
                         </td>
                         <td className="px-6 py-5">
                           <div className="flex flex-wrap gap-3">
@@ -1200,7 +1254,12 @@ function ManagerPage({ onOpenViewer }: { onOpenViewer: (url: string) => void }) 
                               onClick={(event) => {
                                 event.stopPropagation();
                                 void (async () => {
-                                  const copied = await copyToClipboard(buildPrimaryDashboardUrl(client));
+                                  if (!dashboardUrl) {
+                                    setSuccess(null);
+                                    setError('Cliente com token invalido. Atualize o token ClickUp.');
+                                    return;
+                                  }
+                                  const copied = await copyToClipboard(dashboardUrl);
                                   if (copied) {
                                     setError(null);
                                     setSuccess('URL copiada para a area de transferencia.');
@@ -1210,7 +1269,7 @@ function ManagerPage({ onOpenViewer }: { onOpenViewer: (url: string) => void }) 
                                   }
                                 })();
                               }}
-                              disabled={deletingId === client.id}
+                              disabled={deletingId === client.id || !dashboardUrl}
                             >
                               <Copy size={16} />
                               Copy URL
@@ -1223,9 +1282,14 @@ function ManagerPage({ onOpenViewer }: { onOpenViewer: (url: string) => void }) 
                               }}
                               onClick={(event) => {
                                 event.stopPropagation();
-                                onOpenViewer(buildPrimaryDashboardUrl(client));
+                                if (!dashboardUrl) {
+                                  setSuccess(null);
+                                  setError('Cliente com token invalido. Atualize o token ClickUp.');
+                                  return;
+                                }
+                                onOpenViewer(dashboardUrl);
                               }}
-                              disabled={deletingId === client.id}
+                              disabled={deletingId === client.id || !dashboardUrl}
                             >
                               <ExternalLink size={16} />
                               Open
@@ -1434,7 +1498,11 @@ function ManagerPage({ onOpenViewer }: { onOpenViewer: (url: string) => void }) 
                   type="password"
                   className="h-11 w-full rounded-lg border border-slate-300 px-3 font-mono text-slate-700 outline-none focus:border-sky-400"
                   value={form.clickupToken}
-                  onChange={(event) => setForm((current) => ({ ...current, clickupToken: event.target.value }))}
+                  onChange={(event) => {
+                    const rawValue = event.target.value;
+                    const extractedToken = extractTokenFromRawValue(rawValue);
+                    setForm((current) => ({ ...current, clickupToken: extractedToken || rawValue }));
+                  }}
                   placeholder="pk_xxxxxxxxxxxxx"
                 />
               </label>
@@ -1492,8 +1560,11 @@ function App() {
       clickupToken: activeAccess.token,
       clickupTeamId: activeAccess.teamId || null,
     });
-    window.location.replace(primaryUrl);
-    return null;
+    if (primaryUrl) {
+      window.location.replace(primaryUrl);
+      return null;
+    }
+    return <ManagerPage onOpenViewer={openViewer} />;
   }
 
   if (activeAccess) {
