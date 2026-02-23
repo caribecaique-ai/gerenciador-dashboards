@@ -30,6 +30,10 @@ const PRIMARY_DASHBOARD_API_URL = (process.env.PRIMARY_DASHBOARD_API_URL || "htt
   .replace(/\/+$/, "");
 const PRIMARY_DASHBOARD_TIMEOUT_MS = Math.max(5000, Number(process.env.PRIMARY_DASHBOARD_TIMEOUT_MS || 25000));
 const DASHBOARD_PUBLIC_HOST = (process.env.DASHBOARD_PUBLIC_HOST || process.env.PUBLIC_HOST || "").trim();
+const PRIMARY_DASHBOARD_MODE = String(process.env.PRIMARY_DASHBOARD_MODE || "internal").trim().toLowerCase() === "external"
+  ? "external"
+  : "internal";
+const USE_INTERNAL_DASHBOARD = PRIMARY_DASHBOARD_MODE === "internal";
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 
@@ -405,7 +409,11 @@ function resolveDashboardBaseUrl(req) {
     applyHostOverride(base, lanHost);
   }
 
-  if (base.port === "3005" || base.port === "3010" || !base.port) {
+  if (USE_INTERNAL_DASHBOARD) {
+    if (base.port === "3005") {
+      base.port = "3010";
+    }
+  } else if (base.port === "3005" || base.port === "3010" || !base.port) {
     base.port = "5173";
   }
 
@@ -417,8 +425,12 @@ function resolveDashboardBaseUrl(req) {
 
 function buildDashboardUrl(req, client) {
   const base = new URL(resolveDashboardBaseUrl(req));
-  base.searchParams.set("token", client.clickupToken);
-  if (client.clickupTeamId) base.searchParams.set("teamId", client.clickupTeamId);
+  if (USE_INTERNAL_DASHBOARD) {
+    base.searchParams.set("slug", client.dashboardSlug);
+  } else {
+    base.searchParams.set("token", client.clickupToken);
+    if (client.clickupTeamId) base.searchParams.set("teamId", client.clickupTeamId);
+  }
   return base.toString();
 }
 
@@ -571,25 +583,32 @@ async function connectClientByRecord(clientRecord) {
   return { updated, teams, teamId };
 }
 
-async function warmupPrimaryDashboard(client) {
-  if (!client.clickupToken) return;
+async function probePrimaryDashboard(client, { force = false } = {}) {
+  if (!client?.clickupToken) return;
+
+  if (USE_INTERNAL_DASHBOARD) {
+    await buildClientKpiPayload(client);
+    return;
+  }
+
   await axios.get(buildPrimaryDashboardApiUrl("/dashboard"), {
     params: {
       token: client.clickupToken,
       teamId: client.clickupTeamId || "",
-      force: true,
+      force: force ? "true" : undefined,
     },
     timeout: PRIMARY_DASHBOARD_TIMEOUT_MS,
   });
 }
 
+async function warmupPrimaryDashboard(client) {
+  await probePrimaryDashboard(client, { force: true });
+}
+
 async function runClientHealthCheck(client, { allowAutoRecover = true } = {}) {
   const startedAt = Date.now();
   try {
-    await axios.get(buildPrimaryDashboardApiUrl("/dashboard"), {
-      params: { token: client.clickupToken, teamId: client.clickupTeamId || "" },
-      timeout: PRIMARY_DASHBOARD_TIMEOUT_MS,
-    });
+    await probePrimaryDashboard(client);
     const updated = await markHealthSuccess(client.id, Date.now() - startedAt);
     return { ok: true, latencyMs: Date.now() - startedAt, client: updated };
   } catch (error) {
@@ -668,7 +687,8 @@ registerRoute("get", "/health", async (_req, res) => {
       healthIntervalMs: HEALTH_MONITOR_MS,
       warmupIntervalMs: WARMUP_MS,
       failureThreshold: ALERT_FAILURE_THRESHOLD,
-      primaryDashboardApiUrl: PRIMARY_DASHBOARD_API_URL,
+      primaryDashboardMode: PRIMARY_DASHBOARD_MODE,
+      primaryDashboardApiUrl: USE_INTERNAL_DASHBOARD ? null : PRIMARY_DASHBOARD_API_URL,
       primaryDashboardTimeoutMs: PRIMARY_DASHBOARD_TIMEOUT_MS,
     },
   });
@@ -1037,6 +1057,7 @@ registerRoute("post", "/clients/:id/kpi/send", async (req, res) => {
 registerRoute("get", "/dashboard", async (req, res) => {
   const tokenFromHeader = normalizeToken(req.headers.authorization);
   const tokenFromQuery = normalizeToken(typeof req.query.token === "string" ? req.query.token : "");
+  const teamIdFromQuery = String(req.query.teamId || "").trim();
   const slugFromQuery = typeof req.query.slug === "string" ? slugify(req.query.slug) : null;
 
   let token = tokenFromHeader || tokenFromQuery;
@@ -1056,7 +1077,7 @@ registerRoute("get", "/dashboard", async (req, res) => {
 
   const startedAt = Date.now();
   try {
-    let teamId = client.clickupTeamId;
+    let teamId = teamIdFromQuery || client.clickupTeamId;
     if (!teamId) {
       const resolved = await resolveTeamId(token, null);
       teamId = resolved.teamId;

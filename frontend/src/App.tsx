@@ -57,13 +57,22 @@ function resolveManagerApiUrl(): string {
   return resolveHostAwareApiUrl(import.meta.env.VITE_API_URL, '3005', '/api');
 }
 
-function resolvePrimaryDashboardApiUrl(): string {
+function resolvePrimaryDashboardMode(rawValue: string | undefined): 'internal' | 'external' {
+  return String(rawValue || 'internal').trim().toLowerCase() === 'external' ? 'external' : 'internal';
+}
+
+function resolvePrimaryDashboardApiUrl(mode: 'internal' | 'external'): string {
+  if (mode === 'internal') {
+    return API_URL;
+  }
   return resolveHostAwareApiUrl(import.meta.env.VITE_PRIMARY_DASHBOARD_API_URL, '3001', '/api');
 }
 
 const API_URL = resolveManagerApiUrl();
-const PRIMARY_DASHBOARD_API_URL = resolvePrimaryDashboardApiUrl();
 const PAGE_SIZE = 6;
+const PRIMARY_DASHBOARD_MODE = resolvePrimaryDashboardMode(import.meta.env.VITE_PRIMARY_DASHBOARD_MODE);
+const USE_INTERNAL_DASHBOARD = PRIMARY_DASHBOARD_MODE === 'internal';
+const PRIMARY_DASHBOARD_API_URL = resolvePrimaryDashboardApiUrl(PRIMARY_DASHBOARD_MODE);
 
 function resolvePollInterval(rawValue: string | undefined, fallbackMs: number): number {
   const parsed = Number(rawValue);
@@ -76,7 +85,23 @@ function resolvePollInterval(rawValue: string | undefined, fallbackMs: number): 
 const MANAGER_POLL_MS = resolvePollInterval(import.meta.env.VITE_MANAGER_POLL_MS, 5000);
 const VIEWER_POLL_MS = resolvePollInterval(import.meta.env.VITE_VIEWER_POLL_MS, 10000);
 
-function resolvePrimaryDashboardBaseUrl(): string {
+function resolveManagerBaseUrl(): string {
+  if (typeof window === 'undefined') {
+    return 'http://localhost:3010/';
+  }
+
+  const current = new URL(window.location.href);
+  current.pathname = '/';
+  current.search = '';
+  current.hash = '';
+  return current.toString();
+}
+
+function resolvePrimaryDashboardBaseUrl(mode: 'internal' | 'external'): string {
+  if (mode === 'internal') {
+    return resolveManagerBaseUrl();
+  }
+
   if (typeof window === 'undefined') {
     return (import.meta.env.VITE_PRIMARY_DASHBOARD_URL || 'http://localhost:5173/').trim();
   }
@@ -109,7 +134,7 @@ function resolvePrimaryDashboardBaseUrl(): string {
   return current.toString();
 }
 
-const PRIMARY_DASHBOARD_URL = resolvePrimaryDashboardBaseUrl();
+const PRIMARY_DASHBOARD_URL = resolvePrimaryDashboardBaseUrl(PRIMARY_DASHBOARD_MODE);
 
 interface ClientSettings {
   alertEnabled: boolean;
@@ -170,7 +195,22 @@ function hasValidClickupToken(rawValue: string | null | undefined): boolean {
   return Boolean(extractTokenFromRawValue(rawValue));
 }
 
-function buildPrimaryDashboardUrl(client: Pick<Client, 'clickupToken' | 'clickupTeamId' | 'dashboardUrl'>): string | null {
+function buildPrimaryDashboardUrl(
+  client: Pick<Client, 'clickupToken' | 'clickupTeamId' | 'dashboardUrl' | 'dashboardSlug'>
+): string | null {
+  if (USE_INTERNAL_DASHBOARD) {
+    const slug = String(client.dashboardSlug || '').trim();
+    if (!slug) return null;
+    const base = new URL(PRIMARY_DASHBOARD_URL, window.location.origin);
+    base.searchParams.set('slug', slug);
+    if (client.clickupTeamId) {
+      base.searchParams.set('teamId', client.clickupTeamId);
+    } else {
+      base.searchParams.delete('teamId');
+    }
+    return base.toString();
+  }
+
   let token = extractTokenFromRawValue(client.clickupToken);
   if (!token && client.dashboardUrl) {
     try {
@@ -194,14 +234,20 @@ function buildPrimaryDashboardUrl(client: Pick<Client, 'clickupToken' | 'clickup
   return base.toString();
 }
 
-function prefetchPrimaryDashboard(client: Pick<Client, 'clickupToken' | 'clickupTeamId'>): void {
-  const token = extractTokenFromRawValue(client.clickupToken);
-  if (!token) return;
+function prefetchPrimaryDashboard(client: Pick<Client, 'clickupToken' | 'clickupTeamId' | 'dashboardSlug'>): void {
   const warmupUrl = new URL(`${PRIMARY_DASHBOARD_API_URL}/dashboard`);
-  warmupUrl.searchParams.set('token', token);
 
-  if (client.clickupTeamId) {
-    warmupUrl.searchParams.set('teamId', client.clickupTeamId);
+  if (USE_INTERNAL_DASHBOARD) {
+    const slug = String(client.dashboardSlug || '').trim();
+    if (!slug) return;
+    warmupUrl.searchParams.set('slug', slug);
+  } else {
+    const token = extractTokenFromRawValue(client.clickupToken);
+    if (!token) return;
+    warmupUrl.searchParams.set('token', token);
+    if (client.clickupTeamId) {
+      warmupUrl.searchParams.set('teamId', client.clickupTeamId);
+    }
   }
 
   void axios.get(warmupUrl.toString(), { timeout: 10000 }).catch(() => {
@@ -504,7 +550,7 @@ function ViewerPage({ access, onBack }: { access: DashboardAccess; onBack: () =>
   }, [loadDashboard]);
 
   return (
-    <div className="min-h-screen bg-slate-50 p-6 md:p-10">
+    <div className="manager-ui min-h-screen bg-slate-50 p-8 md:p-12">
       <div className="mx-auto w-full max-w-7xl">
         <header className="mb-6 flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm md:flex-row md:items-center md:justify-between">
           <div>
@@ -820,6 +866,8 @@ function ManagerPage({ onOpenViewer }: { onOpenViewer: (url: string) => void }) 
         ? buildPrimaryDashboardUrl({
           clickupToken: targetClient.clickupToken,
           clickupTeamId: resolvedTeamId,
+          dashboardSlug: targetClient.dashboardSlug,
+          dashboardUrl: targetClient.dashboardUrl,
         })
         : null;
 
@@ -1064,7 +1112,7 @@ function ManagerPage({ onOpenViewer }: { onOpenViewer: (url: string) => void }) 
   const connectedCount = clients.filter((client) => client.status === 'Connected').length;
 
   return (
-    <div className="min-h-screen bg-slate-100 p-6 md:p-12">
+    <div className="manager-ui min-h-screen bg-slate-100 p-8 md:p-14">
       <div className="mx-auto w-full max-w-7xl">
         <header className="mb-8 flex flex-col gap-4 border-b border-slate-200 pb-6 md:flex-row md:items-center md:justify-between">
           <h1 className="text-4xl font-semibold tracking-tight text-slate-700">Client Dashboard Management</h1>
@@ -1555,16 +1603,20 @@ function App() {
     setActiveAccess(null);
   };
 
-  if (activeAccess?.token) {
+  if (activeAccess?.token && !USE_INTERNAL_DASHBOARD) {
     const primaryUrl = buildPrimaryDashboardUrl({
       clickupToken: activeAccess.token,
       clickupTeamId: activeAccess.teamId || null,
+      dashboardSlug: '',
+      dashboardUrl: undefined,
     });
     if (primaryUrl) {
-      window.location.replace(primaryUrl);
-      return null;
+      const currentUrl = new URL(window.location.href).toString();
+      if (primaryUrl !== currentUrl) {
+        window.location.replace(primaryUrl);
+        return null;
+      }
     }
-    return <ManagerPage onOpenViewer={openViewer} />;
   }
 
   if (activeAccess) {
