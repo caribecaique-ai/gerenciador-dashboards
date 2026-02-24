@@ -3,8 +3,8 @@ const cors = require("cors");
 const axios = require("axios");
 const compression = require("compression");
 const os = require("os");
-const { PrismaClient, Prisma } = require("@prisma/client");
 require("dotenv").config();
+const { PrismaClient, Prisma } = require("@prisma/client");
 
 const app = express();
 const prisma = new PrismaClient();

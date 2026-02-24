@@ -16,6 +16,7 @@ import {
   X,
 } from 'lucide-react';
 import { ClientRowSkeleton } from './components/Skeleton';
+import NativeDashboardApp from './native-dashboard/App';
 
 function isLocalHostname(value: string): boolean {
   const normalized = String(value || '').toLowerCase();
@@ -57,11 +58,18 @@ function resolveManagerApiUrl(): string {
   return resolveHostAwareApiUrl(import.meta.env.VITE_API_URL, '3005', '/api');
 }
 
-function resolvePrimaryDashboardMode(rawValue: string | undefined): 'internal' | 'external' {
-  return String(rawValue || 'internal').trim().toLowerCase() === 'external' ? 'external' : 'internal';
+type PrimaryDashboardMode = 'internal' | 'external' | 'embedded';
+
+const EMBEDDED_DASHBOARD_PATH = '/ext-dashboard';
+
+function resolvePrimaryDashboardMode(rawValue: string | undefined): PrimaryDashboardMode {
+  const normalized = String(rawValue || 'internal').trim().toLowerCase();
+  if (normalized === 'external') return 'external';
+  if (normalized === 'embedded') return 'embedded';
+  return 'internal';
 }
 
-function resolvePrimaryDashboardApiUrl(mode: 'internal' | 'external'): string {
+function resolvePrimaryDashboardApiUrl(mode: PrimaryDashboardMode): string {
   if (mode === 'internal') {
     return API_URL;
   }
@@ -72,6 +80,8 @@ const API_URL = resolveManagerApiUrl();
 const PAGE_SIZE = 6;
 const PRIMARY_DASHBOARD_MODE = resolvePrimaryDashboardMode(import.meta.env.VITE_PRIMARY_DASHBOARD_MODE);
 const USE_INTERNAL_DASHBOARD = PRIMARY_DASHBOARD_MODE === 'internal';
+const USE_EXTERNAL_DASHBOARD = PRIMARY_DASHBOARD_MODE === 'external';
+const USE_EMBEDDED_DASHBOARD = PRIMARY_DASHBOARD_MODE === 'embedded';
 const PRIMARY_DASHBOARD_API_URL = resolvePrimaryDashboardApiUrl(PRIMARY_DASHBOARD_MODE);
 
 function resolvePollInterval(rawValue: string | undefined, fallbackMs: number): number {
@@ -97,7 +107,7 @@ function resolveManagerBaseUrl(): string {
   return current.toString();
 }
 
-function resolvePrimaryDashboardBaseUrl(mode: 'internal' | 'external'): string {
+function resolvePrimaryDashboardBaseUrl(mode: PrimaryDashboardMode): string {
   if (mode === 'internal') {
     return resolveManagerBaseUrl();
   }
@@ -195,22 +205,9 @@ function hasValidClickupToken(rawValue: string | null | undefined): boolean {
   return Boolean(extractTokenFromRawValue(rawValue));
 }
 
-function buildPrimaryDashboardUrl(
-  client: Pick<Client, 'clickupToken' | 'clickupTeamId' | 'dashboardUrl' | 'dashboardSlug'>
-): string | null {
-  if (USE_INTERNAL_DASHBOARD) {
-    const slug = String(client.dashboardSlug || '').trim();
-    if (!slug) return null;
-    const base = new URL(PRIMARY_DASHBOARD_URL, window.location.origin);
-    base.searchParams.set('slug', slug);
-    if (client.clickupTeamId) {
-      base.searchParams.set('teamId', client.clickupTeamId);
-    } else {
-      base.searchParams.delete('teamId');
-    }
-    return base.toString();
-  }
-
+function resolveClientExternalAccess(
+  client: Pick<Client, 'clickupToken' | 'clickupTeamId' | 'dashboardUrl'>
+): { token: string; teamId: string | null } | null {
   let token = extractTokenFromRawValue(client.clickupToken);
   if (!token && client.dashboardUrl) {
     try {
@@ -221,12 +218,54 @@ function buildPrimaryDashboardUrl(
     }
   }
   if (!token) return null;
+  return { token, teamId: client.clickupTeamId || null };
+}
 
+function buildExternalDashboardUrlFromAccess(access: Pick<DashboardAccess, 'token' | 'teamId'>): string | null {
+  const token = extractTokenFromRawValue(access.token);
+  if (!token) return null;
   const base = new URL(PRIMARY_DASHBOARD_URL, window.location.origin);
   base.searchParams.set('token', token);
+  if (access.teamId) {
+    base.searchParams.set('teamId', access.teamId);
+  } else {
+    base.searchParams.delete('teamId');
+  }
+  return base.toString();
+}
 
-  if (client.clickupTeamId) {
-    base.searchParams.set('teamId', client.clickupTeamId);
+function isEmbeddedDashboardRoute(pathname: string): boolean {
+  const normalized = String(pathname || '/').replace(/\/+$/, '') || '/';
+  return normalized === EMBEDDED_DASHBOARD_PATH;
+}
+
+function buildPrimaryDashboardUrl(
+  client: Pick<Client, 'clickupToken' | 'clickupTeamId' | 'dashboardUrl' | 'dashboardSlug'>
+): string | null {
+  if (USE_INTERNAL_DASHBOARD) {
+    const slug = String(client.dashboardSlug || '').trim();
+    if (!slug) return null;
+    const base = new URL(PRIMARY_DASHBOARD_URL, window.location.origin);
+    base.searchParams.set('slug', slug);
+    base.searchParams.delete('teamId');
+    return base.toString();
+  }
+
+  const externalAccess = resolveClientExternalAccess(client);
+  if (!externalAccess) return null;
+
+  const base = USE_EMBEDDED_DASHBOARD
+    ? new URL(resolveManagerBaseUrl(), window.location.origin)
+    : new URL(PRIMARY_DASHBOARD_URL, window.location.origin);
+
+  if (USE_EMBEDDED_DASHBOARD) {
+    base.pathname = EMBEDDED_DASHBOARD_PATH;
+    base.search = '';
+  }
+
+  base.searchParams.set('token', externalAccess.token);
+  if (externalAccess.teamId) {
+    base.searchParams.set('teamId', externalAccess.teamId);
   } else {
     base.searchParams.delete('teamId');
   }
@@ -310,12 +349,12 @@ function parseDashboardAccessFromUrl(): DashboardAccess | null {
   const token = params.get('token')?.trim() || '';
   const teamId = params.get('teamId')?.trim() || '';
 
-  if (slug) {
-    return { slug };
-  }
-
   if (token && hasValidClickupToken(token)) {
     return { token, teamId: teamId || undefined };
+  }
+
+  if (slug) {
+    return { slug };
   }
 
   return null;
@@ -655,6 +694,26 @@ function ViewerPage({ access, onBack }: { access: DashboardAccess; onBack: () =>
       </div>
     </div>
   );
+}
+
+function EmbeddedDashboardPage({ access, onBack }: { access: DashboardAccess; onBack: () => void }) {
+  const hasValidToken = Boolean(extractTokenFromRawValue(access.token));
+
+  if (!hasValidToken) {
+    return (
+      <div className="manager-ui min-h-screen bg-slate-50 p-8 md:p-12">
+        <div className="mx-auto max-w-3xl rounded-2xl border border-rose-200 bg-rose-50 p-6 text-rose-700">
+          <p className="text-lg font-semibold">Link de dashboard invalido.</p>
+          <p className="mt-2 text-sm">Abra novamente pelo gerenciador para regenerar a URL de acesso.</p>
+          <button type="button" className="btn-secondary mt-4" onClick={onBack}>
+            Voltar ao Manager
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return <NativeDashboardApp />;
 }
 
 function ManagerPage({ onOpenViewer }: { onOpenViewer: (url: string) => void }) {
@@ -1584,10 +1643,14 @@ function ManagerPage({ onOpenViewer }: { onOpenViewer: (url: string) => void }) 
 
 function App() {
   const [activeAccess, setActiveAccess] = useState<DashboardAccess | null>(() => parseDashboardAccessFromUrl());
+  const [isEmbeddedRoute, setIsEmbeddedRoute] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? isEmbeddedDashboardRoute(window.location.pathname) : false
+  );
 
   useEffect(() => {
     const onPopState = () => {
       setActiveAccess(parseDashboardAccessFromUrl());
+      setIsEmbeddedRoute(isEmbeddedDashboardRoute(window.location.pathname));
     };
 
     window.addEventListener('popstate', onPopState);
@@ -1599,27 +1662,43 @@ function App() {
   };
 
   const backToManager = () => {
-    window.history.pushState({}, '', window.location.pathname);
+    window.history.pushState({}, '', '/');
     setActiveAccess(null);
+    setIsEmbeddedRoute(false);
   };
 
-  if (activeAccess?.token && !USE_INTERNAL_DASHBOARD) {
-    const primaryUrl = buildPrimaryDashboardUrl({
-      clickupToken: activeAccess.token,
-      clickupTeamId: activeAccess.teamId || null,
-      dashboardSlug: '',
-      dashboardUrl: undefined,
-    });
-    if (primaryUrl) {
+  if (activeAccess?.token && USE_EXTERNAL_DASHBOARD) {
+    const externalUrl = buildExternalDashboardUrlFromAccess(activeAccess);
+    if (externalUrl) {
       const currentUrl = new URL(window.location.href).toString();
-      if (primaryUrl !== currentUrl) {
-        window.location.replace(primaryUrl);
+      if (externalUrl !== currentUrl) {
+        window.location.replace(externalUrl);
         return null;
       }
     }
   }
 
-  if (activeAccess) {
+  if (activeAccess?.token && USE_EMBEDDED_DASHBOARD && !isEmbeddedRoute) {
+    const embeddedUrl = buildPrimaryDashboardUrl({
+      clickupToken: activeAccess.token,
+      clickupTeamId: activeAccess.teamId || null,
+      dashboardSlug: '',
+      dashboardUrl: undefined,
+    });
+    if (embeddedUrl) {
+      const currentUrl = new URL(window.location.href).toString();
+      if (embeddedUrl !== currentUrl) {
+        window.location.replace(embeddedUrl);
+        return null;
+      }
+    }
+  }
+
+  if (isEmbeddedRoute) {
+    return <EmbeddedDashboardPage access={activeAccess || {}} onBack={backToManager} />;
+  }
+
+  if (activeAccess && (USE_INTERNAL_DASHBOARD || activeAccess.slug)) {
     return <ViewerPage access={activeAccess} onBack={backToManager} />;
   }
 
