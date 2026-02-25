@@ -197,6 +197,7 @@ interface PipelineCatalogEntry {
 interface PipelineTaskModalState {
   blockId: string;
   filter: PipelineTaskFilter;
+  stage?: string | null;
 }
 
 type DashboardMainView = "resumo" | "pessoas";
@@ -238,6 +239,17 @@ const normalizeLabel = (value: string | null | undefined, fallback: string): str
   const normalized = String(value || "").trim();
   return normalized || fallback;
 };
+
+const normalizeStageToken = (value: string | null | undefined): string =>
+  String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+const stageStatusMatches = (left: string | null | undefined, right: string | null | undefined): boolean =>
+  normalizeStageToken(left) === normalizeStageToken(right);
 
 const normalizeIdLabel = (value: string): string => {
   const normalized = value
@@ -1364,6 +1376,7 @@ function NativeDashboardApp() {
                   key={block.id}
                   block={block}
                   onOpenTasks={(filter) => setPipelineTaskModal({ blockId: block.id, filter })}
+                  onOpenStage={(stage) => setPipelineTaskModal({ blockId: block.id, filter: "total", stage })}
                 />
               ))}
             </div>
@@ -1470,9 +1483,10 @@ function NativeDashboardApp() {
 
       {pipelineTaskModal && activeModalBlock ? (
         <PipelineTasksModal
-          key={`${pipelineTaskModal.blockId}:${pipelineTaskModal.filter}`}
+          key={`${pipelineTaskModal.blockId}:${pipelineTaskModal.filter}:${pipelineTaskModal.stage || "all"}`}
           block={activeModalBlock}
           initialFilter={pipelineTaskModal.filter}
+          initialStage={pipelineTaskModal.stage || null}
           loadedRows={detailRows.length}
           totalRows={dashboard?.details?.totalRows || detailRows.length}
           onClose={() => setPipelineTaskModal(null)}
@@ -1828,9 +1842,11 @@ function SimpleMetricCell({
 function PipelineProcessCard({
   block,
   onOpenTasks,
+  onOpenStage,
 }: {
   block: PipelineBlock;
   onOpenTasks: (filter: PipelineTaskFilter) => void;
+  onOpenStage: (stage: string) => void;
 }) {
   const completionClass =
     block.completionPct >= 75
@@ -1887,7 +1903,8 @@ function PipelineProcessCard({
           <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-slate-400">Distribuicao por etapa</p>
           <InlineHint text={HELP_TEXT.processStageDistribution} />
         </div>
-        <StageDistributionChart stages={block.stages} total={block.total} />
+        <p className="mt-1 font-mono text-[9px] uppercase tracking-[0.1em] text-slate-500">clique na etapa para abrir os itens correspondentes</p>
+        <StageDistributionChart stages={block.stages} total={block.total} onStageClick={onOpenStage} />
       </div>
     </article>
   );
@@ -1931,17 +1948,20 @@ function KpiPill({
 function PipelineTasksModal({
   block,
   initialFilter,
+  initialStage,
   loadedRows,
   totalRows,
   onClose,
 }: {
   block: PipelineBlock;
   initialFilter: PipelineTaskFilter;
+  initialStage?: string | null;
   loadedRows: number;
   totalRows: number;
   onClose: () => void;
 }) {
   const [activeFilter, setActiveFilter] = useState<PipelineTaskFilter>(initialFilter);
+  const [activeStage, setActiveStage] = useState<string | null>(initialStage || null);
 
   useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
@@ -1953,15 +1973,19 @@ function PipelineTasksModal({
   }, [onClose]);
 
   const sortedTasks = useMemo(() => sortPipelineTasks(block.tasks), [block.tasks]);
-  const visibleTasks = useMemo(
+  const tasksByFilter = useMemo(
     () => filterPipelineTasks(sortedTasks, activeFilter),
     [sortedTasks, activeFilter]
   );
+  const visibleTasks = useMemo(() => {
+    if (!activeStage) return tasksByFilter;
+    return tasksByFilter.filter((task) => stageStatusMatches(task.status, activeStage));
+  }, [tasksByFilter, activeStage]);
 
   const groupedByStage = useMemo(() => {
     const stageMap = new Map<string, { status: string; count: number; overdue: number }>();
 
-    visibleTasks.forEach((task) => {
+    tasksByFilter.forEach((task) => {
       const key = normalizeLabel(task.status, "Sem status");
       const current = stageMap.get(key) || { status: key, count: 0, overdue: 0 };
       current.count += 1;
@@ -1973,7 +1997,7 @@ function PipelineTasksModal({
       if (b.count !== a.count) return b.count - a.count;
       return a.status.localeCompare(b.status);
     });
-  }, [visibleTasks]);
+  }, [tasksByFilter]);
 
   const maxStageCount = groupedByStage.length
     ? Math.max(...groupedByStage.map((item) => item.count))
@@ -1989,7 +2013,15 @@ function PipelineTasksModal({
     [block.tasks]
   );
 
-  const filteredCount = processCounts[activeFilter];
+  const activeStageLabel = useMemo(() => {
+    if (!activeStage) return null;
+    const matchedGroup = groupedByStage.find((stage) => stageStatusMatches(stage.status, activeStage));
+    if (matchedGroup) return matchedGroup.status;
+    const matchedTask = tasksByFilter.find((task) => stageStatusMatches(task.status, activeStage));
+    return matchedTask?.status || activeStage;
+  }, [activeStage, groupedByStage, tasksByFilter]);
+
+  const filteredCount = visibleTasks.length;
   const resolvedTotalRows = Number.isFinite(totalRows) && totalRows > 0 ? totalRows : loadedRows;
   const hasPartialData = resolvedTotalRows > loadedRows;
 
@@ -2040,9 +2072,46 @@ function PipelineTasksModal({
           })}
         </div>
 
+        <div className="mt-3 rounded border border-white/10 bg-black/25 p-2">
+          <div className="mb-2 inline-flex items-center gap-1">
+            <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-slate-400">Etapa da esteira</p>
+            <InlineHint text="Filtra as tarefas dentro da etapa/status clicado no processo." />
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              onClick={() => setActiveStage(null)}
+              className={`rounded border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.1em] transition ${
+                activeStage === null
+                  ? "border-cyan-400/70 bg-cyan-500/16 text-cyan-100"
+                  : "border-white/15 bg-white/5 text-slate-300 hover:border-cyan-500/35 hover:bg-cyan-500/10"
+              }`}
+            >
+              todas as etapas ({tasksByFilter.length})
+            </button>
+            {groupedByStage.map((stage) => {
+              const isSelected = Boolean(activeStage && stageStatusMatches(stage.status, activeStage));
+              return (
+                <button
+                  key={`stage-filter-${stage.status}`}
+                  type="button"
+                  onClick={() => setActiveStage(stage.status)}
+                  className={`rounded border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.1em] transition ${
+                    isSelected
+                      ? "border-cyan-400/70 bg-cyan-500/16 text-cyan-100"
+                      : "border-white/15 bg-white/5 text-slate-300 hover:border-cyan-500/35 hover:bg-cyan-500/10"
+                  }`}
+                >
+                  {stage.status} ({stage.count})
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         <div className="mt-3 hidden flex-wrap items-center gap-2 lg:flex">
           <span className="rounded border border-cyan-500/35 bg-cyan-500/12 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-cyan-300">
-            Exibindo: {PIPELINE_FILTER_LABEL[activeFilter]}
+            Exibindo: {PIPELINE_FILTER_LABEL[activeFilter]}{activeStageLabel ? ` / ${activeStageLabel}` : ""}
           </span>
           <span className="rounded border border-white/20 bg-white/5 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-slate-300">
             Itens: {filteredCount}
@@ -2221,7 +2290,15 @@ function InfoChip({
   );
 }
 
-function StageDistributionChart({ stages, total }: { stages: PipelineStagePoint[]; total: number }) {
+function StageDistributionChart({
+  stages,
+  total,
+  onStageClick,
+}: {
+  stages: PipelineStagePoint[];
+  total: number;
+  onStageClick?: (stage: string) => void;
+}) {
   if (!stages.length || !total) {
     return <div className="mt-2 rounded border border-dashed border-white/10 px-2 py-3 font-mono text-[10px] uppercase tracking-[0.1em] text-slate-500">sem etapas para este processo</div>;
   }
@@ -2237,8 +2314,8 @@ function StageDistributionChart({ stages, total }: { stages: PipelineStagePoint[
       <div className="mt-2 space-y-1">
         {topStages.map((stage) => {
           const pct = Number(((stage.value / total) * 100).toFixed(1));
-          return (
-            <div key={stage.status} className="flex items-center justify-between gap-2">
+          const content = (
+            <>
               <div className="flex min-w-0 items-center gap-2">
                 <span className="h-2 w-2 rounded-full" style={{ backgroundColor: stageColor(stage.status) }} />
                 <span className="truncate text-xs text-slate-300">{stage.status}</span>
@@ -2247,7 +2324,27 @@ function StageDistributionChart({ stages, total }: { stages: PipelineStagePoint[
                 <span className="font-mono text-[10px] text-slate-400">{stage.value} ({pct}%)</span>
                 {stage.overdue > 0 ? <span className="rounded border border-rose-500/30 bg-rose-500/10 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.1em] text-rose-300">atr {stage.overdue}</span> : null}
               </div>
-            </div>
+            </>
+          );
+
+          if (!onStageClick) {
+            return (
+              <div key={stage.status} className="flex items-center justify-between gap-2">
+                {content}
+              </div>
+            );
+          }
+
+          return (
+            <button
+              key={stage.status}
+              type="button"
+              onClick={() => onStageClick(stage.status)}
+              className="flex w-full items-center justify-between gap-2 rounded border border-white/10 bg-white/5 px-1.5 py-1 text-left transition hover:border-cyan-500/35 hover:bg-cyan-500/8"
+              title={`Abrir itens da etapa ${stage.status}`}
+            >
+              {content}
+            </button>
           );
         })}
       </div>
