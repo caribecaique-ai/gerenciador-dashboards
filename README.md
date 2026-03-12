@@ -1,64 +1,108 @@
-# Central de Controle de Dashboards (ClickUp) - GOLD EDITION
+# Gerenciador de Dashboards
 
-Sistema multitenant de alto desempenho para gestão de clientes, monitoramento de saúde de dashboards e sincronização com ClickUp.
+Gerenciador interno dos dashboards ClickUp, com modo por `slug`, proxy para APIs e dashboard nativo embutido.
 
-## 🚀 Arquitetura
-- **Monorepo**: Gestão simplificada de backend, frontend e pacotes compartilhados.
-- **Backend (NestJS)**: Modular, seguro (JWT + RBAC), realtime (WebSockets).
-- **Frontend (Next.js 14)**: App Router, shadcn/ui, TanStack Query.
-- **Database**: PostgreSQL (Prisma ORM).
-- **Cache/Queue**: Redis + BullMQ.
+## Estrutura esperada
 
-## 📁 Estrutura de Pastas
-- `/apps/api`: Servidor NestJS.
-- `/apps/web`: Frontend Next.js.
-- `/packages/shared`: Tipos e esquemas Zod compartilhados.
-- `/infra`: Arquivos de infraestrutura (Docker, Nginx).
+Este repositorio foi desenhado para funcionar ao lado do repositorio `clickup_dashboard`.
 
-## 🛠️ Setup Local
-
-### Pré-requisitos
-- Node.js 20+
-- Docker e Docker Compose
-
-### 1. Preparar Ambiente
-```bash
-cp .env.example .env
-# Preencha as chaves no .env
+```text
+workspace/
+  dashboard_manager/
+  clickup_dashboard/
 ```
 
-### 2. Rodar com Docker (Recomendado)
-```bash
-npm run docker:up
+Os scripts em `scripts/launchers/` assumem exatamente essa estrutura.
+
+## Portas
+
+- Gerenciador frontend: `3010`
+- Gerenciador API: `3005`
+- Dashboard frontend legado: `5173`
+- Dashboard API legado: `3001`
+
+## Setup rapido
+
+### 1. Clonar os dois repositorios lado a lado
+
+```powershell
+git clone https://github.com/caribecaique-ai/gerenciador-dashboards.git dashboard_manager
+git clone https://github.com/caribecaique-ai/clickup-dashboards.git clickup_dashboard
 ```
 
-### 3. Rodar sem Docker (Modo Dev)
-```bash
-# Na raiz
-npm install
-npm run dev
+### 2. Configurar ambientes
+
+```powershell
+cd dashboard_manager
+Copy-Item apps/api/backend/.env.example apps/api/backend/.env
+Copy-Item frontend/.env.example frontend/.env
 ```
 
-### 4. Setup do Banco
-```bash
-npm run migrate:dev
-npm run seed
+No repositorio `clickup_dashboard`:
+
+```powershell
+cd ..\clickup_dashboard
+Copy-Item backend/.env.example backend/.env
+Copy-Item frontend/.env.example frontend/.env
 ```
 
-## 🔒 Credenciais Padrão
-- **URL**: `http://localhost:3000`
-- **User**: `admin@local`
-- **Pass**: `admin123`
+Preencha principalmente:
 
-## 📡 Endpoints Principais
-- `GET /docs`: Swagger (OpenAPI)
-- `POST /auth/login`: Autenticação
-- `POST /public/telemetry/heartbeat`: Recebimento de métricas dos dashboards
+- `dashboard_manager/apps/api/backend/.env`
+  - `DATABASE_URL`
+  - `PRIMARY_DASHBOARD_MODE`
+  - `PRIMARY_DASHBOARD_API_URL`
+- `clickup_dashboard/backend/.env`
+  - `CLICKUP_API_KEY`
 
-## 🎨 Personalização
-- **Temas**: Altere em `apps/web/app/globals.css`.
-- **Cores**: Use classes Tailwind ou variáveis CSS no `root`.
-- **Novos KPIs**: Adicione campos no `schema.prisma` -> `MetricTimeseries` e atualize os componentes no frontend.
+## Subir localmente
 
----
-Desenvolvido com 💜 pela equipe de Engenharia Sênior.
+### Apenas o gerenciador
+
+```powershell
+$env:MANAGER_ONLY_MODE="1"
+powershell -ExecutionPolicy Bypass -File .\scripts\launchers\start_dashboard_stack.ps1
+```
+
+### Gerenciador + dashboards legados
+
+```powershell
+$env:MANAGER_ONLY_MODE="0"
+$env:MANAGER_NETWORK_MODE="1"
+powershell -ExecutionPolicy Bypass -File .\scripts\launchers\start_dashboard_stack.ps1
+```
+
+Ou:
+
+```powershell
+.\scripts\launchers\start_dashboard_stack.bat
+```
+
+## Autostart no Windows
+
+Registrar:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\launchers\register_dashboard_autostart.ps1
+```
+
+Remover:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\launchers\unregister_dashboard_autostart.ps1
+```
+
+## URLs
+
+Local:
+
+- `http://localhost:3010`
+- `http://localhost:3010/?slug=qgbet`
+- `http://localhost:3010/?slug=caique`
+- `http://localhost:5173`
+
+## Observacoes
+
+- O dashboard interno por `slug` roda no frontend do gerenciador.
+- O frontend de `5173` continua existindo como dashboard legado separado.
+- Os scripts usam `vite preview` para os frontends, porque ficou mais estavel em ambiente Windows local.
