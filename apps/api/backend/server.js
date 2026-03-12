@@ -25,6 +25,9 @@ const ALERT_COOLDOWN_MS = Math.max(60000, Number(process.env.ALERT_COOLDOWN_MINU
 const DASHBOARD_PUBLIC_URL = (process.env.DASHBOARD_PUBLIC_URL || "").trim();
 const ALERT_EMAIL_WEBHOOK_URL = (process.env.ALERT_EMAIL_WEBHOOK_URL || "").trim();
 const ALERT_WHATSAPP_WEBHOOK_URL = (process.env.ALERT_WHATSAPP_WEBHOOK_URL || "").trim();
+const PRIMARY_DASHBOARD_MODE = String(process.env.PRIMARY_DASHBOARD_MODE || "internal")
+  .trim()
+  .toLowerCase();
 const PRIMARY_DASHBOARD_API_URL = (process.env.PRIMARY_DASHBOARD_API_URL || "http://localhost:3001/api")
   .trim()
   .replace(/\/+$/, "");
@@ -390,6 +393,10 @@ function buildErrorPayload(error, fallbackMessage) {
   };
 }
 
+function useInternalDashboardLinks() {
+  return PRIMARY_DASHBOARD_MODE === "internal";
+}
+
 function resolveDashboardBaseUrl(req) {
   if (DASHBOARD_PUBLIC_URL) {
     return DASHBOARD_PUBLIC_URL.endsWith("/") ? DASHBOARD_PUBLIC_URL : `${DASHBOARD_PUBLIC_URL}/`;
@@ -405,8 +412,8 @@ function resolveDashboardBaseUrl(req) {
     applyHostOverride(base, lanHost);
   }
 
-  if (base.port === "3005" || base.port === "3010" || !base.port) {
-    base.port = "5173";
+  if (base.port === "3005" || base.port === "3010" || base.port === "5173" || !base.port) {
+    base.port = useInternalDashboardLinks() ? "3010" : "5173";
   }
 
   base.pathname = "/";
@@ -417,14 +424,144 @@ function resolveDashboardBaseUrl(req) {
 
 function buildDashboardUrl(req, client) {
   const base = new URL(resolveDashboardBaseUrl(req));
-  base.searchParams.set("token", client.clickupToken);
+  if (useInternalDashboardLinks()) {
+    const slug = String(client.dashboardSlug || "").trim();
+    if (!slug) return null;
+    base.searchParams.set("slug", slug);
+    base.searchParams.delete("token");
+    base.searchParams.delete("teamId");
+    return base.toString();
+  }
+
+  const token = normalizeToken(client.clickupToken);
+  if (!token) return null;
+  base.searchParams.set("token", token);
   if (client.clickupTeamId) base.searchParams.set("teamId", client.clickupTeamId);
+  else base.searchParams.delete("teamId");
   return base.toString();
 }
 
 function buildPrimaryDashboardApiUrl(pathname = "/dashboard") {
   const normalizedPath = pathname.startsWith("/") ? pathname : `/${pathname}`;
   return `${PRIMARY_DASHBOARD_API_URL}${normalizedPath}`;
+}
+
+function createDashboardAccessError(statusCode, error, details = null) {
+  return { statusCode, error, details };
+}
+
+async function resolveDashboardAccess(req) {
+  const tokenFromHeader = normalizeToken(req.headers.authorization);
+  const tokenFromQuery = normalizeToken(typeof req.query.token === "string" ? req.query.token : "");
+  const slugFromQuery = typeof req.query.slug === "string" ? slugify(req.query.slug) : null;
+
+  let token = tokenFromHeader || tokenFromQuery;
+  let client = null;
+
+  if (token) {
+    client = await prisma.client.findUnique({ where: { clickupToken: token } });
+  }
+
+  if (!client && slugFromQuery) {
+    client = await prisma.client.findUnique({ where: { dashboardSlug: slugFromQuery } });
+    token = client?.clickupToken || token;
+  }
+
+  if (!token && !slugFromQuery) {
+    return {
+      error: createDashboardAccessError(401, "Missing access key (token or slug)"),
+    };
+  }
+
+  if (!client) {
+    return {
+      error: createDashboardAccessError(404, "Client dashboard not found", "Use a valid token or registered slug"),
+    };
+  }
+
+  const normalizedToken = normalizeToken(token || client.clickupToken);
+  if (!normalizedToken) {
+    return {
+      error: createDashboardAccessError(400, "Client ClickUp token is invalid"),
+    };
+  }
+
+  return {
+    client,
+    token: normalizedToken,
+    slug: slugFromQuery,
+  };
+}
+
+function buildDashboardProxyParams(query, token) {
+  const params = { ...(query || {}) };
+  delete params.slug;
+  params.token = token;
+  return params;
+}
+
+async function syncClientTeamIdFromPayload(client, payload) {
+  const responseTeamId =
+    payload?.team?.id !== undefined && payload?.team?.id !== null
+      ? String(payload.team.id)
+      : payload?.teamId !== undefined && payload?.teamId !== null
+        ? String(payload.teamId)
+        : null;
+
+  if (!responseTeamId || responseTeamId === String(client.clickupTeamId || "")) {
+    return client;
+  }
+
+  return prisma.client.update({
+    where: { id: client.id },
+    data: { clickupTeamId: responseTeamId, status: STATUS.CONNECTED },
+  });
+}
+
+function isRichDashboardRequest(req) {
+  const query = req.query || {};
+  const richKeys = [
+    "scopeType",
+    "scopeId",
+    "periodDays",
+    "page",
+    "pageSize",
+    "status",
+    "category",
+    "assignee",
+    "priority",
+    "metric",
+    "bucket",
+    "compare",
+    "historyDays",
+    "force",
+  ];
+
+  return richKeys.some((key) => query[key] !== undefined);
+}
+
+async function proxyPrimaryDashboardRequest(req, res, pathname) {
+  const access = await resolveDashboardAccess(req);
+  if (access.error) {
+    return res.status(access.error.statusCode).json({
+      error: access.error.error,
+      details: access.error.details,
+    });
+  }
+
+  try {
+    const response = await axios.get(buildPrimaryDashboardApiUrl(pathname), {
+      params: buildDashboardProxyParams(req.query, access.token),
+      headers: { Authorization: access.token },
+      timeout: PRIMARY_DASHBOARD_TIMEOUT_MS,
+    });
+
+    await syncClientTeamIdFromPayload(access.client, response.data).catch(() => null);
+    return res.json(response.data);
+  } catch (error) {
+    const payload = buildErrorPayload(error, `Failed to proxy ${pathname}`);
+    return res.status(payload.statusCode).json({ error: payload.error, details: payload.details });
+  }
 }
 
 function computeHealth(client) {
@@ -665,6 +802,7 @@ registerRoute("get", "/health", async (_req, res) => {
     now: new Date().toISOString(),
     dbProvider: "postgresql",
     monitor: {
+      primaryDashboardMode: PRIMARY_DASHBOARD_MODE,
       healthIntervalMs: HEALTH_MONITOR_MS,
       warmupIntervalMs: WARMUP_MS,
       failureThreshold: ALERT_FAILURE_THRESHOLD,
@@ -1034,26 +1172,74 @@ registerRoute("post", "/clients/:id/kpi/send", async (req, res) => {
   }
 });
 
+registerRoute("get", "/teams", async (req, res) => {
+  return proxyPrimaryDashboardRequest(req, res, "/teams");
+});
+
+registerRoute("get", "/navigation", async (req, res) => {
+  return proxyPrimaryDashboardRequest(req, res, "/navigation");
+});
+
+registerRoute("get", "/dashboard/timeseries", async (req, res) => {
+  return proxyPrimaryDashboardRequest(req, res, "/dashboard/timeseries");
+});
+
+registerRoute("put", "/dashboard/tasks/:taskId/status", async (req, res) => {
+  const { taskId } = req.params;
+  const nextStatus = String(req.body?.status || "").trim();
+
+  if (!taskId) {
+    return res.status(400).json({ error: "Task id is required" });
+  }
+
+  if (!nextStatus) {
+    return res.status(400).json({ error: "Task status is required" });
+  }
+
+  const access = await resolveDashboardAccess(req);
+  if (access.error) {
+    return res.status(access.error.statusCode).json({
+      error: access.error.error,
+      details: access.error.details,
+    });
+  }
+
+  try {
+    const client = clickupClient(access.token);
+    const response = await client.put(`/task/${taskId}`, { status: nextStatus });
+
+    return res.json({
+      ok: true,
+      taskId,
+      status: response.data?.status?.status || nextStatus,
+      task: response.data || null,
+      client: {
+        id: access.client.id,
+        name: access.client.name,
+        dashboardSlug: access.client.dashboardSlug,
+      },
+      syncedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    const payload = buildErrorPayload(error, "Failed to update ClickUp task status");
+    return res.status(payload.statusCode).json({ error: payload.error, details: payload.details });
+  }
+});
+
 registerRoute("get", "/dashboard", async (req, res) => {
-  const tokenFromHeader = normalizeToken(req.headers.authorization);
-  const tokenFromQuery = normalizeToken(typeof req.query.token === "string" ? req.query.token : "");
-  const slugFromQuery = typeof req.query.slug === "string" ? slugify(req.query.slug) : null;
-
-  let token = tokenFromHeader || tokenFromQuery;
-  let client = null;
-  if (token) {
-    client = await prisma.client.findUnique({ where: { clickupToken: token } });
-  } else if (slugFromQuery) {
-    client = await prisma.client.findUnique({ where: { dashboardSlug: slugFromQuery } });
-    token = client?.clickupToken || null;
-  } else {
-    return res.status(401).json({ error: "Missing access key (token or slug)" });
+  if (isRichDashboardRequest(req)) {
+    return proxyPrimaryDashboardRequest(req, res, "/dashboard");
   }
 
-  if (!client) {
-    return res.status(404).json({ error: "Client dashboard not found", details: "Use a valid token or registered slug" });
+  const access = await resolveDashboardAccess(req);
+  if (access.error) {
+    return res.status(access.error.statusCode).json({
+      error: access.error.error,
+      details: access.error.details,
+    });
   }
 
+  const { client, token } = access;
   const startedAt = Date.now();
   try {
     let teamId = client.clickupTeamId;

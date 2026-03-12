@@ -16,42 +16,73 @@ import {
   X,
 } from 'lucide-react';
 import { ClientRowSkeleton } from './components/Skeleton';
+import NativeDashboardApp from './native-dashboard/App';
 
-function resolveManagerApiUrl(): string {
-  const envValue = String(import.meta.env.VITE_API_URL || '').trim();
-  if (envValue) return envValue;
-
-  if (typeof window === 'undefined') {
-    return 'http://localhost:3005/api';
-  }
-
-  const current = new URL(window.location.href);
-  current.port = '3005';
-  current.pathname = '/api';
-  current.search = '';
-  current.hash = '';
-  return current.toString().replace(/\/+$/, '');
+function isLocalHostname(value: string): boolean {
+  const normalized = String(value || '').toLowerCase();
+  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1' || normalized === '[::1]';
 }
 
-function resolvePrimaryDashboardApiUrl(): string {
-  const envValue = String(import.meta.env.VITE_PRIMARY_DASHBOARD_API_URL || '').trim();
-  if (envValue) return envValue.replace(/\/+$/, '');
-
+function resolveHostAwareApiUrl(
+  envValue: string | undefined,
+  fallbackPort: string,
+  fallbackPath: string
+): string {
   if (typeof window === 'undefined') {
-    return 'http://localhost:3001/api';
+    return (envValue || `http://localhost:${fallbackPort}${fallbackPath}`).trim();
   }
 
-  const current = new URL(window.location.href);
-  current.port = '3001';
-  current.pathname = '/api';
-  current.search = '';
-  current.hash = '';
-  return current.toString().replace(/\/+$/, '');
+  const browserHost = window.location.hostname;
+  const browserIsLocal = isLocalHostname(browserHost);
+  const defaultUrl = `http://${browserHost}:${fallbackPort}${fallbackPath}`;
+  const raw = String(envValue || '').trim();
+  if (!raw) return defaultUrl;
+
+  try {
+    const parsed = new URL(raw);
+    const envIsLocal = isLocalHostname(parsed.hostname);
+    if (!browserIsLocal && envIsLocal) {
+      parsed.protocol = 'http:';
+      parsed.hostname = browserHost;
+      parsed.port = parsed.port || fallbackPort;
+      if (!parsed.pathname || parsed.pathname === '/') parsed.pathname = fallbackPath;
+      return parsed.toString().replace(/\/+$/, '');
+    }
+    return parsed.toString().replace(/\/+$/, '');
+  } catch {
+    return raw;
+  }
+}
+
+function resolveManagerApiUrl(): string {
+  return resolveHostAwareApiUrl(import.meta.env.VITE_API_URL, '3005', '/api');
+}
+
+type PrimaryDashboardMode = 'internal' | 'external' | 'embedded';
+
+const EMBEDDED_DASHBOARD_PATH = '/ext-dashboard';
+
+function resolvePrimaryDashboardMode(rawValue: string | undefined): PrimaryDashboardMode {
+  const normalized = String(rawValue || 'internal').trim().toLowerCase();
+  if (normalized === 'external') return 'external';
+  if (normalized === 'embedded') return 'embedded';
+  return 'internal';
+}
+
+function resolvePrimaryDashboardApiUrl(mode: PrimaryDashboardMode): string {
+  if (mode === 'internal') {
+    return API_URL;
+  }
+  return resolveHostAwareApiUrl(import.meta.env.VITE_PRIMARY_DASHBOARD_API_URL, '3001', '/api');
 }
 
 const API_URL = resolveManagerApiUrl();
-const PRIMARY_DASHBOARD_API_URL = resolvePrimaryDashboardApiUrl();
 const PAGE_SIZE = 6;
+const PRIMARY_DASHBOARD_MODE = resolvePrimaryDashboardMode(import.meta.env.VITE_PRIMARY_DASHBOARD_MODE);
+const USE_INTERNAL_DASHBOARD = PRIMARY_DASHBOARD_MODE === 'internal';
+const USE_EXTERNAL_DASHBOARD = PRIMARY_DASHBOARD_MODE === 'external';
+const USE_EMBEDDED_DASHBOARD = PRIMARY_DASHBOARD_MODE === 'embedded';
+const PRIMARY_DASHBOARD_API_URL = resolvePrimaryDashboardApiUrl(PRIMARY_DASHBOARD_MODE);
 
 function resolvePollInterval(rawValue: string | undefined, fallbackMs: number): number {
   const parsed = Number(rawValue);
@@ -64,25 +95,56 @@ function resolvePollInterval(rawValue: string | undefined, fallbackMs: number): 
 const MANAGER_POLL_MS = resolvePollInterval(import.meta.env.VITE_MANAGER_POLL_MS, 5000);
 const VIEWER_POLL_MS = resolvePollInterval(import.meta.env.VITE_VIEWER_POLL_MS, 10000);
 
-function resolvePrimaryDashboardBaseUrl(): string {
-  const envValue = import.meta.env.VITE_PRIMARY_DASHBOARD_URL;
-  if (envValue) {
-    return envValue;
-  }
-
+function resolveManagerBaseUrl(): string {
   if (typeof window === 'undefined') {
-    return 'http://localhost:5173/';
+    return 'http://localhost:3010/';
   }
 
   const current = new URL(window.location.href);
-  current.port = '5173';
   current.pathname = '/';
   current.search = '';
   current.hash = '';
   return current.toString();
 }
 
-const PRIMARY_DASHBOARD_URL = resolvePrimaryDashboardBaseUrl();
+function resolvePrimaryDashboardBaseUrl(mode: PrimaryDashboardMode): string {
+  if (mode === 'internal') {
+    return resolveManagerBaseUrl();
+  }
+
+  if (typeof window === 'undefined') {
+    return (import.meta.env.VITE_PRIMARY_DASHBOARD_URL || 'http://localhost:5173/').trim();
+  }
+
+  const envValue = String(import.meta.env.VITE_PRIMARY_DASHBOARD_URL || '').trim();
+  const browserHost = window.location.hostname;
+  const browserIsLocal = isLocalHostname(browserHost);
+  const preferredPort = String(import.meta.env.VITE_PRIMARY_DASHBOARD_PORT || '5173').trim() || '5173';
+
+  if (envValue) {
+    try {
+      const parsed = new URL(envValue);
+      if (!browserIsLocal && isLocalHostname(parsed.hostname)) {
+        parsed.protocol = 'http:';
+        parsed.hostname = browserHost;
+        parsed.port = preferredPort;
+      }
+      return parsed.toString();
+    } catch {
+      return envValue;
+    }
+  }
+
+  const current = new URL(window.location.href);
+  current.protocol = 'http:';
+  current.port = preferredPort;
+  current.pathname = '/';
+  current.search = '';
+  current.hash = '';
+  return current.toString();
+}
+
+const PRIMARY_DASHBOARD_URL = resolvePrimaryDashboardBaseUrl(PRIMARY_DASHBOARD_MODE);
 
 interface ClientSettings {
   alertEnabled: boolean;
@@ -119,54 +181,112 @@ interface Client {
   health?: ClientHealthSnapshot;
 }
 
-function isLoopbackHostname(hostname: string): boolean {
-  const normalized = String(hostname || '').trim().toLowerCase();
-  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1';
-}
+function extractTokenFromRawValue(rawValue: string | null | undefined): string | null {
+  if (!rawValue) return null;
+  let candidate = String(rawValue).replace(/^Bearer\s+/i, '').trim();
+  if (!candidate) return null;
 
-function buildPrimaryDashboardUrl(client: Pick<Client, 'clickupToken' | 'clickupTeamId' | 'dashboardUrl'>): string {
-  const base = new URL(PRIMARY_DASHBOARD_URL, window.location.origin);
-
-  if (client.dashboardUrl) {
+  if (/^https?:\/\//i.test(candidate)) {
     try {
-      const normalized = new URL(client.dashboardUrl, base);
-      const normalizedUsesManagerPort = normalized.port === '3005' || normalized.port === '3010';
-      const shouldSwapHost =
-        normalizedUsesManagerPort ||
-        (isLoopbackHostname(normalized.hostname) && !isLoopbackHostname(base.hostname));
-
-      if (shouldSwapHost) {
-        normalized.protocol = base.protocol;
-        normalized.hostname = base.hostname;
-        normalized.port = base.port;
-      }
-
-      normalized.pathname = '/';
-      normalized.search = '';
-      normalized.hash = '';
-      normalized.searchParams.set('token', client.clickupToken);
-      if (client.clickupTeamId) normalized.searchParams.set('teamId', client.clickupTeamId);
-      else normalized.searchParams.delete('teamId');
-
-      return normalized.toString();
+      const parsed = new URL(candidate);
+      candidate = String(parsed.searchParams.get('token') || parsed.searchParams.get('access_token') || '').replace(/^Bearer\s+/i, '').trim();
     } catch {
-      // Fallback below if dashboardUrl is malformed.
+      return null;
     }
   }
 
-  base.searchParams.set('token', client.clickupToken);
-  if (client.clickupTeamId) base.searchParams.set('teamId', client.clickupTeamId);
-  else base.searchParams.delete('teamId');
+  if (!candidate) return null;
+  if (candidate.includes('://') || /[/?&=]/.test(candidate)) return null;
+  if (!/^[A-Za-z0-9._-]{16,}$/.test(candidate)) return null;
+  return candidate;
+}
+
+function hasValidClickupToken(rawValue: string | null | undefined): boolean {
+  return Boolean(extractTokenFromRawValue(rawValue));
+}
+
+function resolveClientExternalAccess(
+  client: Pick<Client, 'clickupToken' | 'clickupTeamId' | 'dashboardUrl'>
+): { token: string; teamId: string | null } | null {
+  let token = extractTokenFromRawValue(client.clickupToken);
+  if (!token && client.dashboardUrl) {
+    try {
+      const parsed = new URL(client.dashboardUrl);
+      token = extractTokenFromRawValue(parsed.searchParams.get('token'));
+    } catch {
+      token = null;
+    }
+  }
+  if (!token) return null;
+  return { token, teamId: client.clickupTeamId || null };
+}
+
+function buildExternalDashboardUrlFromAccess(access: Pick<DashboardAccess, 'token' | 'teamId'>): string | null {
+  const token = extractTokenFromRawValue(access.token);
+  if (!token) return null;
+  const base = new URL(PRIMARY_DASHBOARD_URL, window.location.origin);
+  base.searchParams.set('token', token);
+  if (access.teamId) {
+    base.searchParams.set('teamId', access.teamId);
+  } else {
+    base.searchParams.delete('teamId');
+  }
+  return base.toString();
+}
+
+function isEmbeddedDashboardRoute(pathname: string): boolean {
+  const normalized = String(pathname || '/').replace(/\/+$/, '') || '/';
+  return normalized === EMBEDDED_DASHBOARD_PATH;
+}
+
+function buildPrimaryDashboardUrl(
+  client: Pick<Client, 'clickupToken' | 'clickupTeamId' | 'dashboardUrl' | 'dashboardSlug'>
+): string | null {
+  if (USE_INTERNAL_DASHBOARD) {
+    const slug = String(client.dashboardSlug || '').trim();
+    if (!slug) return null;
+    const base = new URL(PRIMARY_DASHBOARD_URL, window.location.origin);
+    base.searchParams.set('slug', slug);
+    base.searchParams.delete('teamId');
+    return base.toString();
+  }
+
+  const externalAccess = resolveClientExternalAccess(client);
+  if (!externalAccess) return null;
+
+  const base = USE_EMBEDDED_DASHBOARD
+    ? new URL(resolveManagerBaseUrl(), window.location.origin)
+    : new URL(PRIMARY_DASHBOARD_URL, window.location.origin);
+
+  if (USE_EMBEDDED_DASHBOARD) {
+    base.pathname = EMBEDDED_DASHBOARD_PATH;
+    base.search = '';
+  }
+
+  base.searchParams.set('token', externalAccess.token);
+  if (externalAccess.teamId) {
+    base.searchParams.set('teamId', externalAccess.teamId);
+  } else {
+    base.searchParams.delete('teamId');
+  }
 
   return base.toString();
 }
 
-function prefetchPrimaryDashboard(client: Pick<Client, 'clickupToken' | 'clickupTeamId'>): void {
+function prefetchPrimaryDashboard(client: Pick<Client, 'clickupToken' | 'clickupTeamId' | 'dashboardSlug'>): void {
   const warmupUrl = new URL(`${PRIMARY_DASHBOARD_API_URL}/dashboard`);
-  warmupUrl.searchParams.set('token', client.clickupToken);
 
-  if (client.clickupTeamId) {
-    warmupUrl.searchParams.set('teamId', client.clickupTeamId);
+  if (USE_INTERNAL_DASHBOARD) {
+    const slug = String(client.dashboardSlug || '').trim();
+    if (!slug) return;
+    warmupUrl.searchParams.set('slug', slug);
+  } else {
+    const token = extractTokenFromRawValue(client.clickupToken);
+    if (!token) return;
+    warmupUrl.searchParams.set('token', token);
+    if (client.clickupTeamId) {
+      warmupUrl.searchParams.set('teamId', client.clickupTeamId);
+    }
   }
 
   void axios.get(warmupUrl.toString(), { timeout: 10000 }).catch(() => {
@@ -229,12 +349,12 @@ function parseDashboardAccessFromUrl(): DashboardAccess | null {
   const token = params.get('token')?.trim() || '';
   const teamId = params.get('teamId')?.trim() || '';
 
-  if (slug) {
-    return { slug };
+  if (token && hasValidClickupToken(token)) {
+    return { token, teamId: teamId || undefined };
   }
 
-  if (token) {
-    return { token, teamId: teamId || undefined };
+  if (slug) {
+    return { slug };
   }
 
   return null;
@@ -469,7 +589,7 @@ function ViewerPage({ access, onBack }: { access: DashboardAccess; onBack: () =>
   }, [loadDashboard]);
 
   return (
-    <div className="min-h-screen bg-slate-50 p-6 md:p-10">
+    <div className="manager-ui min-h-screen bg-slate-50 p-8 md:p-12">
       <div className="mx-auto w-full max-w-7xl">
         <header className="mb-6 flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm md:flex-row md:items-center md:justify-between">
           <div>
@@ -574,6 +694,27 @@ function ViewerPage({ access, onBack }: { access: DashboardAccess; onBack: () =>
       </div>
     </div>
   );
+}
+
+function EmbeddedDashboardPage({ access, onBack }: { access: DashboardAccess; onBack: () => void }) {
+  const hasValidToken = Boolean(extractTokenFromRawValue(access.token));
+  const hasValidSlug = Boolean(String(access.slug || '').trim());
+
+  if (!hasValidToken && !hasValidSlug) {
+    return (
+      <div className="manager-ui min-h-screen bg-slate-50 p-8 md:p-12">
+        <div className="mx-auto max-w-3xl rounded-2xl border border-rose-200 bg-rose-50 p-6 text-rose-700">
+          <p className="text-lg font-semibold">Link de dashboard invalido.</p>
+          <p className="mt-2 text-sm">Abra novamente pelo gerenciador para regenerar a URL de acesso.</p>
+          <button type="button" className="btn-secondary mt-4" onClick={onBack}>
+            Voltar ao Manager
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return <NativeDashboardApp />;
 }
 
 function ManagerPage({ onOpenViewer }: { onOpenViewer: (url: string) => void }) {
@@ -747,10 +888,17 @@ function ManagerPage({ onOpenViewer }: { onOpenViewer: (url: string) => void }) 
     setError(null);
     setSuccess(null);
 
+    const normalizedToken = extractTokenFromRawValue(form.clickupToken);
+    if (!normalizedToken) {
+      setError('Token ClickUp invalido. Cole o token (pk_...) ou uma URL que contenha ?token=pk_...');
+      setIsAdding(false);
+      return;
+    }
+
     try {
       const response = await axios.post<Client>(`${API_URL}/clients`, {
         name: form.name,
-        clickupToken: form.clickupToken,
+        clickupToken: normalizedToken,
         dashboardSlug: form.dashboardSlug || undefined,
       });
       setForm({ name: '', clickupToken: '', dashboardSlug: '' });
@@ -778,6 +926,8 @@ function ManagerPage({ onOpenViewer }: { onOpenViewer: (url: string) => void }) 
         ? buildPrimaryDashboardUrl({
           clickupToken: targetClient.clickupToken,
           clickupTeamId: resolvedTeamId,
+          dashboardSlug: targetClient.dashboardSlug,
+          dashboardUrl: targetClient.dashboardUrl,
         })
         : null;
 
@@ -842,7 +992,14 @@ function ManagerPage({ onOpenViewer }: { onOpenViewer: (url: string) => void }) 
       return;
     }
 
-    const copied = await copyToClipboard(buildPrimaryDashboardUrl(selectedClient));
+    const dashboardUrl = buildPrimaryDashboardUrl(selectedClient);
+    if (!dashboardUrl) {
+      setSuccess(null);
+      setError('Token do cliente invalido. Corrija o token ClickUp para gerar a URL.');
+      return;
+    }
+
+    const copied = await copyToClipboard(dashboardUrl);
     if (copied) {
       setError(null);
       setSuccess('URL copiada para a area de transferencia.');
@@ -1015,7 +1172,7 @@ function ManagerPage({ onOpenViewer }: { onOpenViewer: (url: string) => void }) 
   const connectedCount = clients.filter((client) => client.status === 'Connected').length;
 
   return (
-    <div className="min-h-screen bg-slate-100 p-6 md:p-12">
+    <div className="manager-ui min-h-screen bg-slate-100 p-8 md:p-14">
       <div className="mx-auto w-full max-w-7xl">
         <header className="mb-8 flex flex-col gap-4 border-b border-slate-200 pb-6 md:flex-row md:items-center md:justify-between">
           <h1 className="text-4xl font-semibold tracking-tight text-slate-700">Client Dashboard Management</h1>
@@ -1143,6 +1300,7 @@ function ManagerPage({ onOpenViewer }: { onOpenViewer: (url: string) => void }) 
                   pagedClients.map((client) => {
                     const chip = statusChip(client.status);
                     const isSelected = selectedClient?.id === client.id;
+                    const dashboardUrl = buildPrimaryDashboardUrl(client);
                     return (
                       <tr
                         key={client.id}
@@ -1164,17 +1322,21 @@ function ManagerPage({ onOpenViewer }: { onOpenViewer: (url: string) => void }) 
                           {client.status === 'Connected' ? formatDateTime(client.updatedAt) : '--'}
                         </td>
                         <td className="px-6 py-5">
-                          <a
-                            className="break-all text-sm text-blue-700 underline underline-offset-4"
-                            href={buildPrimaryDashboardUrl(client)}
-                            onClick={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              onOpenViewer(buildPrimaryDashboardUrl(client));
-                            }}
-                          >
-                            {buildPrimaryDashboardUrl(client)}
-                          </a>
+                          {dashboardUrl ? (
+                            <a
+                              className="break-all text-sm text-blue-700 underline underline-offset-4"
+                              href={dashboardUrl}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                onOpenViewer(dashboardUrl);
+                              }}
+                            >
+                              {dashboardUrl}
+                            </a>
+                          ) : (
+                            <span className="text-sm text-slate-500">Token invalido</span>
+                          )}
                         </td>
                         <td className="px-6 py-5">
                           <div className="flex flex-wrap gap-3">
@@ -1200,7 +1362,12 @@ function ManagerPage({ onOpenViewer }: { onOpenViewer: (url: string) => void }) 
                               onClick={(event) => {
                                 event.stopPropagation();
                                 void (async () => {
-                                  const copied = await copyToClipboard(buildPrimaryDashboardUrl(client));
+                                  if (!dashboardUrl) {
+                                    setSuccess(null);
+                                    setError('Cliente com token invalido. Atualize o token ClickUp.');
+                                    return;
+                                  }
+                                  const copied = await copyToClipboard(dashboardUrl);
                                   if (copied) {
                                     setError(null);
                                     setSuccess('URL copiada para a area de transferencia.');
@@ -1210,7 +1377,7 @@ function ManagerPage({ onOpenViewer }: { onOpenViewer: (url: string) => void }) 
                                   }
                                 })();
                               }}
-                              disabled={deletingId === client.id}
+                              disabled={deletingId === client.id || !dashboardUrl}
                             >
                               <Copy size={16} />
                               Copy URL
@@ -1223,9 +1390,14 @@ function ManagerPage({ onOpenViewer }: { onOpenViewer: (url: string) => void }) 
                               }}
                               onClick={(event) => {
                                 event.stopPropagation();
-                                onOpenViewer(buildPrimaryDashboardUrl(client));
+                                if (!dashboardUrl) {
+                                  setSuccess(null);
+                                  setError('Cliente com token invalido. Atualize o token ClickUp.');
+                                  return;
+                                }
+                                onOpenViewer(dashboardUrl);
                               }}
-                              disabled={deletingId === client.id}
+                              disabled={deletingId === client.id || !dashboardUrl}
                             >
                               <ExternalLink size={16} />
                               Open
@@ -1434,7 +1606,11 @@ function ManagerPage({ onOpenViewer }: { onOpenViewer: (url: string) => void }) 
                   type="password"
                   className="h-11 w-full rounded-lg border border-slate-300 px-3 font-mono text-slate-700 outline-none focus:border-sky-400"
                   value={form.clickupToken}
-                  onChange={(event) => setForm((current) => ({ ...current, clickupToken: event.target.value }))}
+                  onChange={(event) => {
+                    const rawValue = event.target.value;
+                    const extractedToken = extractTokenFromRawValue(rawValue);
+                    setForm((current) => ({ ...current, clickupToken: extractedToken || rawValue }));
+                  }}
                   placeholder="pk_xxxxxxxxxxxxx"
                 />
               </label>
@@ -1468,10 +1644,14 @@ function ManagerPage({ onOpenViewer }: { onOpenViewer: (url: string) => void }) 
 
 function App() {
   const [activeAccess, setActiveAccess] = useState<DashboardAccess | null>(() => parseDashboardAccessFromUrl());
+  const [isEmbeddedRoute, setIsEmbeddedRoute] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? isEmbeddedDashboardRoute(window.location.pathname) : false
+  );
 
   useEffect(() => {
     const onPopState = () => {
       setActiveAccess(parseDashboardAccessFromUrl());
+      setIsEmbeddedRoute(isEmbeddedDashboardRoute(window.location.pathname));
     };
 
     window.addEventListener('popstate', onPopState);
@@ -1483,20 +1663,47 @@ function App() {
   };
 
   const backToManager = () => {
-    window.history.pushState({}, '', window.location.pathname);
+    window.history.pushState({}, '', '/');
     setActiveAccess(null);
+    setIsEmbeddedRoute(false);
   };
 
-  if (activeAccess?.token) {
-    const primaryUrl = buildPrimaryDashboardUrl({
-      clickupToken: activeAccess.token,
-      clickupTeamId: activeAccess.teamId || null,
-    });
-    window.location.replace(primaryUrl);
-    return null;
+  if (activeAccess?.token && USE_EXTERNAL_DASHBOARD) {
+    const externalUrl = buildExternalDashboardUrlFromAccess(activeAccess);
+    if (externalUrl) {
+      const currentUrl = new URL(window.location.href).toString();
+      if (externalUrl !== currentUrl) {
+        window.location.replace(externalUrl);
+        return null;
+      }
+    }
   }
 
-  if (activeAccess) {
+  if (activeAccess?.token && USE_EMBEDDED_DASHBOARD && !isEmbeddedRoute) {
+    const embeddedUrl = buildPrimaryDashboardUrl({
+      clickupToken: activeAccess.token,
+      clickupTeamId: activeAccess.teamId || null,
+      dashboardSlug: '',
+      dashboardUrl: undefined,
+    });
+    if (embeddedUrl) {
+      const currentUrl = new URL(window.location.href).toString();
+      if (embeddedUrl !== currentUrl) {
+        window.location.replace(embeddedUrl);
+        return null;
+      }
+    }
+  }
+
+  if (isEmbeddedRoute) {
+    return <EmbeddedDashboardPage access={activeAccess || {}} onBack={backToManager} />;
+  }
+
+  if (USE_INTERNAL_DASHBOARD && activeAccess) {
+    return <EmbeddedDashboardPage access={activeAccess} onBack={backToManager} />;
+  }
+
+  if (activeAccess && activeAccess.slug) {
     return <ViewerPage access={activeAccess} onBack={backToManager} />;
   }
 
