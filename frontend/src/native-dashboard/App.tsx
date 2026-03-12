@@ -3665,10 +3665,10 @@ function PipelineMovementMiniDashboard({
                 } as CSSProperties
               }
             >
-              <div className="flex items-start justify-between gap-3">
+              <div className="journey-process-header flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-slate-500">{process.sourceLabel}</p>
-                  <h3 className="mt-1 break-words font-display text-[1.1rem] font-semibold text-slate-100">{process.label}</h3>
+                  <h3 className="journey-process-title mt-1 break-words font-display text-[1.1rem] font-semibold text-slate-100">{process.label}</h3>
                 </div>
                 <div className="journey-process-badge shrink-0 text-right">
                   <p className="font-display text-4xl font-semibold leading-none text-slate-50">{process.open}</p>
@@ -3676,7 +3676,7 @@ function PipelineMovementMiniDashboard({
                 </div>
               </div>
 
-              <div className="mt-4 flex flex-wrap gap-1.5">
+              <div className="journey-process-meta mt-4 flex flex-wrap gap-1.5">
                 <span className="rounded border border-white/15 bg-white/5 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.1em] text-slate-300">
                   {process.totalTasks} tarefas
                 </span>

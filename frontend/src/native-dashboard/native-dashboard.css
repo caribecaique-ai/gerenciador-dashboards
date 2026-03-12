@@ -1096,6 +1096,8 @@ aside {
 .journey-process-card {
   position: relative;
   isolation: isolate;
+  display: flex;
+  flex-direction: column;
   background:
     radial-gradient(circle at top right, color-mix(in srgb, var(--journey-accent) 16%, transparent) 0%, transparent 38%),
     linear-gradient(180deg, rgba(12, 17, 25, 0.96), rgba(8, 13, 20, 0.98));
@@ -1112,6 +1114,19 @@ aside {
 
 .journey-process-badge {
   min-width: 88px;
+}
+
+.journey-process-header {
+  min-height: 86px;
+}
+
+.journey-process-title {
+  min-height: 2.8em;
+}
+
+.journey-process-meta {
+  min-height: 60px;
+  align-content: flex-start;
 }
 
 .journey-process-hero {
@@ -1189,6 +1204,12 @@ aside {
 
 .dashboard-root[data-viewport="mobile"] .journey-process-badge {
   min-width: 72px;
+}
+
+.dashboard-root[data-viewport="mobile"] .journey-process-header,
+.dashboard-root[data-viewport="mobile"] .journey-process-meta,
+.dashboard-root[data-viewport="mobile"] .journey-process-title {
+  min-height: 0;
 }
 
 .dashboard-root[data-viewport="mobile"] .journey-process-card h3 {
