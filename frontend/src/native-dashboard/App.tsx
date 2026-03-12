@@ -25,7 +25,6 @@ import {
   TrendComparisonChart,
   TrendSparkline,
   ValueTrend,
-  VerticalBarChartKpi,
 } from "./components/charts/TaskCharts";
 import { ChartSkeleton, MetricSkeleton } from "./components/Skeleton";
 import "./native-dashboard.css";
@@ -86,6 +85,12 @@ const HELP_TEXT = {
     "Concentracao de tarefas atrasadas por responsavel para priorizacao de acao.",
   panelPriorityQueue:
     "Fila atual por nivel de prioridade para orientar alocacao de esforco.",
+  panelExpertFlow:
+    "Mostra quantos status e frentes cada expert ainda possui ativos dentro da esteira de afiliados.",
+  panelProcessFlow:
+    "Volume atual de tarefas em aberto por processo para leitura rapida da esteira.",
+  panelStageFlow:
+    "Distribuicao atual das tarefas por etapa/status para localizar concentracao do fluxo.",
   kpiTotal:
     "Total de tarefas no bloco atual.",
   kpiOpen:
@@ -679,6 +684,12 @@ const formatCompactDateTime = (value?: string | null): string => {
     minute: "2-digit",
   });
 };
+
+const sumTrendCurrent = (trend: SparkPoint[]): number =>
+  trend.reduce(
+    (sum, point) => sum + (Number.isFinite(point.current) ? Number(point.current) : 0),
+    0
+  );
 
 const resolvePipelineIdentity = (row: DashboardDetailRow): { id: string; label: string; hierarchy: string } => {
   const listId = normalizeLabel(row.listId, "");
@@ -2319,6 +2330,56 @@ function NativeDashboardApp() {
     [visiblePeopleMetrics]
   );
 
+  const expertMovementDataset = useMemo(() => {
+    if (affiliateStatusBoard.rows.length) {
+      return affiliateStatusBoard.rows
+        .map((row) => ({
+          label: row.expertName,
+          value: row.openCount,
+        }))
+        .filter((item) => item.value > 0)
+        .slice(0, 8);
+    }
+
+    return visiblePeopleMetrics
+      .map((person) => {
+        const recentMovement = sumTrendCurrent(person.trend);
+        return {
+          label: person.assignee,
+          value: recentMovement > 0 ? recentMovement : person.open,
+        };
+      })
+      .filter((item) => item.value > 0)
+      .slice(0, 8);
+  }, [affiliateStatusBoard.rows, visiblePeopleMetrics]);
+
+  const processMovementDataset = useMemo(
+    () =>
+      pipelineBlocks
+        .map((block) => {
+          const recentMovement = sumTrendCurrent(block.trend);
+          return {
+            label: block.label,
+            value: recentMovement > 0 ? recentMovement : block.open,
+          };
+        })
+        .filter((item) => item.value > 0)
+        .slice(0, 8),
+    [pipelineBlocks]
+  );
+
+  const stageMovementDataset = useMemo(
+    () =>
+      kanbanColumns
+        .map((column) => ({
+          label: column.status,
+          value: column.total,
+        }))
+        .filter((item) => item.value > 0)
+        .slice(0, 8),
+    [kanbanColumns]
+  );
+
   const activeModalBlock = useMemo(() => {
     if (!pipelineTaskModal) return null;
     return taskModalBlockRegistry.get(pipelineTaskModal.blockId) || null;
@@ -2837,35 +2898,42 @@ function NativeDashboardApp() {
         </section>
 
         <section className={`${activeView === "resumo" ? "grid" : "hidden"} gap-4 lg:grid-cols-2 2xl:grid-cols-3`}>
-          <Panel title="Em andamento por status" subtitle="distribuicao atual no escopo" helpText={HELP_TEXT.panelWipByStatus}>
+          <Panel title="Experts em movimento" subtitle="frentes ativas na esteira" helpText={HELP_TEXT.panelExpertFlow}>
             <div className="chart-box chart-box-cyan h-[220px] sm:h-[280px] xl:h-[300px]">
-              {(dashboard?.wipByStatus || []).length ? (
+              {expertMovementDataset.length ? (
                 <HorizontalBarChartKpi
-                  data={(dashboard?.wipByStatus || [])
-                    .slice(0, 8)
-                    .map((item) => ({ label: item.status, value: item.value }))}
+                  data={expertMovementDataset}
                   barColor="#00f3ff"
+                  countLabel="Experts"
                 />
               ) : (
-                <EmptyData message="Sem dados de status" />
+                <EmptyData message="Sem experts ativos na esteira" />
               )}
             </div>
           </Panel>
-          <Panel title="Atrasadas por responsavel" subtitle="quem concentra maior risco" helpText={HELP_TEXT.panelOverdueByAssignee}>
+          <Panel title="Processos em movimento" subtitle="volume atual por frente" helpText={HELP_TEXT.panelProcessFlow}>
             <div className="chart-box chart-box-rose h-[220px] sm:h-[280px] xl:h-[300px]">
-              {(dashboard?.overdue.byAssignee || []).length ? (
-                <HorizontalBarChartKpi data={(dashboard?.overdue.byAssignee || []).slice(0, 8).map((item) => ({ label: item.assignee, value: item.value }))} barColor="#ff5f87" />
+              {processMovementDataset.length ? (
+                <HorizontalBarChartKpi
+                  data={processMovementDataset}
+                  barColor="#ff5f87"
+                  countLabel="Processos"
+                />
               ) : (
-                <EmptyData message="Sem tarefas atrasadas" />
+                <EmptyData message="Sem processos ativos no momento" />
               )}
             </div>
           </Panel>
-          <Panel title="Fila por prioridade" subtitle="P0, P1, P2" helpText={HELP_TEXT.panelPriorityQueue}>
+          <Panel title="Esteira por etapa" subtitle="concentracao atual do fluxo" helpText={HELP_TEXT.panelStageFlow}>
             <div className="chart-box chart-box-violet h-[220px] sm:h-[280px] xl:h-[300px]">
-              {(dashboard?.priorityQueue || []).length ? (
-                <VerticalBarChartKpi data={(dashboard?.priorityQueue || []).map((item) => ({ label: item.priority, value: item.value }))} barColor="#a68dff" />
+              {stageMovementDataset.length ? (
+                <HorizontalBarChartKpi
+                  data={stageMovementDataset}
+                  barColor="#a68dff"
+                  countLabel="Etapas"
+                />
               ) : (
-                <EmptyData message="Sem dados de prioridade" />
+                <EmptyData message="Sem etapas mapeadas na esteira" />
               )}
             </div>
           </Panel>

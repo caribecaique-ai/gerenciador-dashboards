@@ -35,6 +35,7 @@ interface VerticalBarDatum {
 interface VerticalBarChartProps {
   data: VerticalBarDatum[];
   barColor?: string;
+  countLabel?: string;
 }
 
 interface HorizontalBarDatum {
@@ -45,6 +46,7 @@ interface HorizontalBarDatum {
 interface HorizontalBarChartProps {
   data: HorizontalBarDatum[];
   barColor?: string;
+  countLabel?: string;
 }
 
 interface TrendPointDatum {
@@ -80,6 +82,7 @@ interface UniformVerticalBarChartProps {
   data: UniformDatum[];
   valueLabel: string;
   valueColor: string;
+  countLabel?: string;
 }
 
 interface TrendSparklineDatum {
@@ -178,7 +181,12 @@ const resolveTrendDirection = (firstValue: number | null, latestValue: number | 
   return "stable";
 };
 
-const UniformVerticalBarChart = ({ data, valueLabel, valueColor }: UniformVerticalBarChartProps) => {
+const UniformVerticalBarChart = ({
+  data,
+  valueLabel,
+  valueColor,
+  countLabel = "Categorias",
+}: UniformVerticalBarChartProps) => {
   const chartUid = useId().replace(/:/g, "");
   const barGradientId = `${chartUid}-bar-gradient`;
 
@@ -230,7 +238,7 @@ const UniformVerticalBarChart = ({ data, valueLabel, valueColor }: UniformVertic
           Media: {formatMetric(averageValue)}
         </span>
         <span className="rounded border border-white/20 bg-white/5 px-1.5 py-0.5 text-slate-300">
-          Categorias: {normalizedData.length}
+          {countLabel}: {normalizedData.length}
         </span>
       </div>
 
@@ -310,7 +318,12 @@ const UniformVerticalBarChart = ({ data, valueLabel, valueColor }: UniformVertic
   );
 };
 
-const UniformHorizontalBarChart = ({ data, valueLabel, valueColor }: UniformVerticalBarChartProps) => {
+const UniformHorizontalBarChart = ({
+  data,
+  valueLabel,
+  valueColor,
+  countLabel = "Categorias",
+}: UniformVerticalBarChartProps) => {
   const chartUid = useId().replace(/:/g, "");
   const barGradientId = `${chartUid}-bar-horizontal-gradient`;
 
@@ -365,7 +378,7 @@ const UniformHorizontalBarChart = ({ data, valueLabel, valueColor }: UniformVert
           Media: {formatMetric(averageValue)}
         </span>
         <span className="rounded border border-white/20 bg-white/5 px-1.5 py-0.5 text-slate-300">
-          Responsaveis: {normalizedData.length}
+          {countLabel}: {normalizedData.length}
         </span>
       </div>
 
@@ -922,22 +935,26 @@ export const DonutChart = ({ data, colors = DEFAULT_COLORS }: DonutChartProps) =
 export const VerticalBarChartKpi = ({
   data,
   barColor = "#00f3ff",
+  countLabel,
 }: VerticalBarChartProps) => (
   <UniformVerticalBarChart
     data={data.map((item) => ({ label: item.label, value: item.value }))}
     valueLabel="Quantidade"
     valueColor={barColor}
+    countLabel={countLabel}
   />
 );
 
 export const HorizontalBarChartKpi = ({
   data,
   barColor = "#00f3ff",
+  countLabel,
 }: HorizontalBarChartProps) => (
   <UniformHorizontalBarChart
     data={data.map((item) => ({ label: item.label, value: item.value }))}
     valueLabel="Quantidade"
     valueColor={barColor}
+    countLabel={countLabel}
   />
 );
 
