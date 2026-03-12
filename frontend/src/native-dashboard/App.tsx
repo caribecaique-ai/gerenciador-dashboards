@@ -3106,11 +3106,12 @@ function NativeDashboardApp() {
 
           {visiblePeopleMetrics.length ? (
             peopleLayoutMode === "cards" ? (
-              <div className="mt-4 grid gap-4 xl:grid-cols-2 2xl:grid-cols-3">
+              <div className="mt-4 grid gap-3 sm:gap-4 xl:grid-cols-2 2xl:grid-cols-3">
                 {visiblePeopleMetrics.map((person) => (
                   <AssigneeMetricsCard
                     key={person.id}
                     block={person}
+                    isCompactMobile={isMobileViewport}
                     onOpenTasks={(filter) =>
                       setPipelineTaskModal({ blockId: person.id, filter })
                     }
@@ -3587,9 +3588,11 @@ function InfoLine({
 
 function AssigneeMetricsCard({
   block,
+  isCompactMobile,
   onOpenTasks,
 }: {
   block: AssigneeMetricsBlock;
+  isCompactMobile?: boolean;
   onOpenTasks: (filter: PipelineTaskFilter) => void;
 }) {
   const topStatuses = block.statusBreakdown.slice(0, 4);
@@ -3610,10 +3613,141 @@ function AssigneeMetricsCard({
     block.overdue > 0
       ? "border-rose-500/30 bg-rose-500/10 text-rose-300"
       : "border-emerald-500/30 bg-emerald-500/10 text-emerald-300";
+  const dominantStatus = topStatuses[0] || null;
+  const productivityPct = block.completionPct <= 0 ? 0 : Math.max(6, Math.min(block.completionPct, 100));
+  const loadPct =
+    block.loadScore === null || block.loadScore <= 0
+      ? 0
+      : Math.max(6, Math.min(block.loadScore * 10, 100));
+
+  if (isCompactMobile) {
+    return (
+      <article
+        className="min-w-0 overflow-hidden rounded border border-white/10 bg-black/30 p-2.5"
+        style={{
+          boxShadow: `inset 0 2px 0 ${accentColor}`,
+        }}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="inline-flex max-w-full items-center gap-2">
+              <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: accentColor }} />
+              <p className="dashboard-card-title truncate font-display text-base font-bold text-slate-50 tracking-[0.01em]">
+                {block.assignee}
+              </p>
+            </div>
+            <p className="mt-1 break-words font-mono text-[9px] uppercase tracking-[0.1em] text-slate-500">
+              {block.hierarchy}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => onOpenTasks("total")}
+            className={`inline-flex shrink-0 rounded border px-2 py-1 font-mono text-[9px] uppercase tracking-[0.1em] ${riskClass}`}
+          >
+            {block.overdue ? `${block.overdue} atr` : "ver"}
+          </button>
+        </div>
+
+        <div className="mt-2 grid grid-cols-2 gap-1.5">
+          <InfoChip label="Abertas" value={String(block.open)} />
+          <InfoChip label="Concluidas" value={String(block.closed)} />
+          <InfoChip label="Atrasadas" value={String(block.overdue)} tone={block.overdue > 0 ? "danger" : "neutral"} />
+          <InfoChip label="Alta prio" value={String(block.highPriority)} />
+        </div>
+
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          {topStatuses.slice(0, 2).map((status) => (
+            <span
+              key={`${block.id}-mobile-${status.status}`}
+              className="inline-flex max-w-full items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-[0.1em]"
+              style={{
+                borderColor: `${stageColor(status.status)}55`,
+                backgroundColor: `${stageColor(status.status)}1a`,
+                color: stageColor(status.status),
+              }}
+            >
+              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: stageColor(status.status) }} />
+              {status.status} ({status.value})
+            </span>
+          ))}
+        </div>
+
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+          <span className="font-mono text-[9px] uppercase tracking-[0.1em] text-slate-500">
+            tempo etapa {formatHoursWindow(block.avgStatusAgeHours)}
+          </span>
+          {dominantStatus ? (
+            <span
+              className="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-[0.1em]"
+              style={{
+                borderColor: `${stageColor(dominantStatus.status)}55`,
+                backgroundColor: `${stageColor(dominantStatus.status)}1a`,
+                color: stageColor(dominantStatus.status),
+              }}
+            >
+              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: stageColor(dominantStatus.status) }} />
+              {dominantStatus.status}
+            </span>
+          ) : null}
+        </div>
+
+        <div className="chart-box chart-box-blue mt-2 rounded border border-white/10 bg-black/20 p-2">
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <p className="font-mono text-[9px] uppercase tracking-[0.1em] text-slate-400">Movimento diario</p>
+            <span className="font-mono text-[9px] uppercase tracking-[0.08em] text-slate-500">
+              {block.completionPct}% concl.
+            </span>
+          </div>
+          <div className="h-[68px]">
+            <TrendSparkline
+              data={block.trend}
+              currentColor="#47a9ff"
+              previousColor="#f59e0b"
+            />
+          </div>
+        </div>
+
+        <div className="mt-2 space-y-1.5">
+          <div className="space-y-1">
+            <div className="flex items-center justify-between gap-2 font-mono text-[9px] uppercase tracking-[0.08em] text-slate-500">
+              <span>Produtividade</span>
+              <span>{block.completionPct}%</span>
+            </div>
+            <div className="h-2 overflow-hidden rounded bg-white/5">
+              <div
+                className="h-full rounded"
+                style={{
+                  width: `${productivityPct}%`,
+                  background: `linear-gradient(90deg, ${accentColor}, ${accentColor}cc)`,
+                }}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <div className="flex items-center justify-between gap-2 font-mono text-[9px] uppercase tracking-[0.08em] text-slate-500">
+              <span>Carga</span>
+              <span>{block.loadScore === null ? "-" : block.loadScore.toFixed(1)}</span>
+            </div>
+            <div className="h-2 overflow-hidden rounded bg-white/5">
+              <div
+                className="h-full rounded"
+                style={{
+                  width: `${loadPct}%`,
+                  background: `linear-gradient(90deg, ${accentColor}, ${accentColor}cc)`,
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      </article>
+    );
+  }
 
   return (
     <article
-      className="rounded border border-white/10 bg-black/30 p-3"
+      className="min-w-0 overflow-hidden rounded border border-white/10 bg-black/30 p-3"
       style={{
         boxShadow: `inset 0 2px 0 ${accentColor}`,
       }}
