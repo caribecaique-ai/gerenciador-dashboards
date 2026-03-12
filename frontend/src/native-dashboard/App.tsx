@@ -10,12 +10,11 @@ import {
   useRef,
   useState,
 } from "react";
-import { AlertTriangle, ChevronDown, ExternalLink, LoaderCircle, Moon, RefreshCcw, Sun } from "lucide-react";
+import { AlertTriangle, ChevronDown, ExternalLink, LoaderCircle, Moon, Sun } from "lucide-react";
 import {
   type CapacityPoint,
   type DashboardDetailRow,
   type NavigationNode,
-  type ScopeType,
   getDashboard,
   updateDashboardTaskStatus,
 } from "./services/api";
@@ -32,7 +31,6 @@ import { ChartSkeleton, MetricSkeleton } from "./components/Skeleton";
 import "./native-dashboard.css";
 
 const FIXED_REFRESH_MS = 3000;
-const PERIOD_OPTIONS = [7, 14, 30, 60, 90, 180, 365];
 const THEME_STORAGE_KEY = "clickup_dashboard_theme";
 const CHECKLIST_STORAGE_KEY_PREFIX = "clickup_dashboard_checklist_state";
 const HELP_TEXT = {
@@ -146,13 +144,6 @@ function readChecklistState(storageKey: string): Record<string, boolean> {
   } catch {
     return {};
   }
-}
-
-interface ScopeOption {
-  key: string;
-  label: string;
-  type: ScopeType;
-  id: string | null;
 }
 
 interface SparkPoint {
@@ -556,22 +547,6 @@ const buildPairSparkline = (current: number | null, previous: number | null): Sp
       previous: safePrevious,
     };
   });
-};
-
-const flattenScopes = (nodes: NavigationNode[], depth = 0): ScopeOption[] => {
-  const result: ScopeOption[] = [];
-  nodes.forEach((node) => {
-    result.push({
-      key: `${node.scopeType}:${node.scopeId || "all"}`,
-      label: `${" ".repeat(depth * 2)}${node.label}`,
-      type: node.scopeType,
-      id: node.scopeId,
-    });
-    if (node.children?.length) {
-      result.push(...flattenScopes(node.children, depth + 1));
-    }
-  });
-  return result;
 };
 
 const buildPipelineCatalog = (nodes: NavigationNode[]): PipelineCatalogEntry[] => {
@@ -1818,7 +1793,7 @@ function NativeDashboardApp() {
   const [activeView, setActiveView] = useState<DashboardMainView>("resumo");
   const [assigneeSearch, setAssigneeSearch] = useState("");
   const [peopleLayoutMode, setPeopleLayoutMode] = useState<PeopleLayoutMode>("list");
-  const [dashboardFilters, setDashboardFilters] = useState({
+  const [dashboardFilters] = useState({
     periodDays: 30,
     status: "",
     category: "",
@@ -1848,9 +1823,7 @@ function NativeDashboardApp() {
     loading,
     error,
     lastSyncAt,
-    isSyncing,
     changeTeam,
-    changeScope,
     refreshNow,
   } = useClickUpData(refreshMs, dashboardFilters);
 
@@ -1929,7 +1902,6 @@ function NativeDashboardApp() {
     };
   }, [theme]);
 
-  const scopeOptions = useMemo(() => flattenScopes(navigationTree), [navigationTree]);
   const pipelineCatalog = useMemo(() => buildPipelineCatalog(navigationTree), [navigationTree]);
   const isMobileViewport = viewportProfile === "mobile";
   const dashboardSlug = useMemo(() => {
@@ -1986,20 +1958,6 @@ function NativeDashboardApp() {
   const checklistStorageKey = useMemo(
     () => `${CHECKLIST_STORAGE_KEY_PREFIX}:${dashboardSlug || selectedTeamId || "default"}:${scopeKey}`,
     [dashboardSlug, scopeKey, selectedTeamId]
-  );
-  const scopeOptionsSafe = useMemo(
-    () =>
-      scopeOptions.length
-        ? scopeOptions
-        : [
-            {
-              key: scopeKey,
-              label: selectedScope.label,
-              type: selectedScope.type,
-              id: selectedScope.id,
-            },
-          ],
-    [scopeKey, scopeOptions, selectedScope.id, selectedScope.label, selectedScope.type]
   );
 
   useEffect(() => {
@@ -2381,13 +2339,6 @@ function NativeDashboardApp() {
     };
   }, [hasOpenModal]);
 
-  const updateFilter = useCallback(
-    (key: "periodDays" | "status" | "category" | "assignee" | "priority", value: number | string) => {
-      setDashboardFilters((current) => ({ ...current, [key]: value, page: 1 }));
-    },
-    []
-  );
-
   if (loading && !dashboard) {
     return (
       <div
@@ -2572,15 +2523,6 @@ function NativeDashboardApp() {
                   {teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
                 </select>
               </label>
-              <label className="control-card min-w-0 sm:min-w-[110px]"><span className="control-label">Atualizacao</span>
-                <select className="control-input" value={refreshMs} disabled>
-                  <option value={FIXED_REFRESH_MS}>3s (fixo)</option>
-                </select>
-              </label>
-              <button type="button" className="control-card control-button min-w-0 sm:min-w-[110px] border-cyan-500/25 bg-cyan-500/10 text-cyan-200" onClick={() => refreshNow()}>
-                <span className="control-label">Sincronizar</span>
-                <span className="top-action-value mt-0.5 inline-flex items-center gap-1.5 text-xs"><RefreshCcw className={`h-3.5 w-3.5 ${isSyncing ? "animate-spin" : ""}`} />Atualizar</span>
-              </button>
               <button
                 type="button"
                 className="control-card control-button min-w-0 sm:min-w-[110px] border-amber-500/25 bg-amber-500/10 text-amber-200"
@@ -2593,41 +2535,6 @@ function NativeDashboardApp() {
                 </span>
               </button>
             </div>
-          </div>
-
-          <div className="mt-2 grid grid-cols-1 gap-1.5 min-[460px]:grid-cols-2 sm:gap-2 lg:grid-cols-5">
-            <label className="control-card col-span-2 lg:col-span-1"><span className="control-label">Escopo</span>
-              <select className="control-input" value={scopeKey} onChange={(event) => {
-                const next = scopeOptionsSafe.find((item) => item.key === event.target.value);
-                if (!next) return;
-                changeScope({ type: next.type, id: next.id, label: next.label.trim() });
-              }}>
-                {scopeOptionsSafe.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
-              </select>
-            </label>
-            <label className="control-card"><span className="control-label">Janela</span>
-              <select className="control-input" value={dashboardFilters.periodDays} onChange={(event) => updateFilter("periodDays", Number(event.target.value))}>
-                {PERIOD_OPTIONS.map((days) => <option key={days} value={days}>{days} dias</option>)}
-              </select>
-            </label>
-            <label className="control-card"><span className="control-label">Status</span>
-              <select className="control-input" value={dashboardFilters.status} onChange={(event) => updateFilter("status", event.target.value)}>
-                <option value="">Todos</option>
-                {(dashboard?.dimensions?.statuses || []).map((item) => <option key={item.label} value={item.label}>{item.label}</option>)}
-              </select>
-            </label>
-            <label className="control-card"><span className="control-label">Categoria</span>
-              <select className="control-input" value={dashboardFilters.category} onChange={(event) => updateFilter("category", event.target.value)}>
-                <option value="">Todas</option>
-                {(dashboard?.dimensions?.categories || []).map((item) => <option key={item.label} value={item.label}>{item.label}</option>)}
-              </select>
-            </label>
-            <label className="control-card"><span className="control-label">Responsavel</span>
-              <select className="control-input" value={dashboardFilters.assignee} onChange={(event) => updateFilter("assignee", event.target.value)}>
-                <option value="">Todos</option>
-                {(dashboard?.dimensions?.assignees || []).map((item) => <option key={item.label} value={item.label}>{item.label}</option>)}
-              </select>
-            </label>
           </div>
 
           <div className="mt-2 grid grid-cols-1 gap-1.5 min-[420px]:grid-cols-2 sm:mt-2.5 sm:gap-2 sm:flex sm:flex-wrap sm:items-center">
