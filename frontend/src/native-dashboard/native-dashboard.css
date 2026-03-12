@@ -1093,6 +1093,120 @@ aside {
   color: #dbe9fb;
 }
 
+.journey-process-card {
+  position: relative;
+  isolation: isolate;
+  background:
+    radial-gradient(circle at top right, color-mix(in srgb, var(--journey-accent) 16%, transparent) 0%, transparent 38%),
+    linear-gradient(180deg, rgba(12, 17, 25, 0.96), rgba(8, 13, 20, 0.98));
+}
+
+.journey-process-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0));
+}
+
+.journey-process-badge {
+  min-width: 88px;
+}
+
+.journey-process-hero {
+  position: relative;
+  overflow: hidden;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--journey-accent) 12%, rgba(255, 255, 255, 0.02)) 0%, rgba(255, 255, 255, 0.02) 100%),
+    rgba(5, 10, 16, 0.72);
+}
+
+.journey-process-progress {
+  display: flex;
+  width: 100%;
+  height: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.journey-process-progress-fill {
+  height: 100%;
+}
+
+.journey-process-progress-fill.is-open {
+  background: linear-gradient(90deg, rgba(0, 243, 255, 0.95), rgba(71, 169, 255, 0.92));
+}
+
+.journey-process-progress-fill.is-closed {
+  background: linear-gradient(90deg, rgba(85, 233, 134, 0.95), rgba(52, 211, 153, 0.9));
+}
+
+.journey-process-kpi {
+  backdrop-filter: blur(8px);
+}
+
+.journey-summary-card {
+  position: relative;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(17, 23, 32, 0.94), rgba(10, 14, 20, 0.98)),
+    rgba(0, 0, 0, 0.2);
+}
+
+.journey-summary-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  width: 2px;
+  background: linear-gradient(180deg, rgba(0, 243, 255, 0.9), rgba(166, 141, 255, 0.7));
+  opacity: 0.9;
+}
+
+.journey-stage-legend {
+  position: relative;
+  overflow: hidden;
+}
+
+.journey-stage-legend::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  width: 2px;
+  background: var(--journey-stage-accent, #00f3ff);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--journey-stage-accent, #00f3ff) 45%, transparent);
+}
+
+.dashboard-root[data-viewport="mobile"] .journey-process-card {
+  padding: 0.95rem;
+}
+
+.dashboard-root[data-viewport="mobile"] .journey-process-badge {
+  min-width: 72px;
+}
+
+.dashboard-root[data-viewport="mobile"] .journey-process-card h3 {
+  font-size: 1rem;
+}
+
+.dashboard-root[data-viewport="mobile"] .journey-process-hero {
+  padding: 0.85rem 0.9rem;
+}
+
+.dashboard-root[data-viewport="mobile"] .journey-process-hero .font-display.text-5xl {
+  font-size: 2.6rem !important;
+}
+
+.dashboard-root[data-viewport="mobile"] .journey-summary-card {
+  padding: 0.9rem 0.95rem;
+}
+
 .hint-anchor {
   position: relative;
   display: inline-flex;

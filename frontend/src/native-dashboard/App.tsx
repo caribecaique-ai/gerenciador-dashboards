@@ -111,6 +111,8 @@ const HELP_TEXT = {
     "Lista auditavel do processo selecionado, com status, dono, prioridade e vencimento.",
   peopleRoster:
     "Lista resumida de responsaveis com cor de risco/carga para leitura imediata.",
+  miniPipelineDashboard:
+    "Painel resumido da esteira de experts: etapas, nomes e processos ativos, com leitura mais direta que os graficos tradicionais.",
 } as const;
 
 type DashboardTheme = "dark" | "light";
@@ -375,6 +377,40 @@ interface AffiliateJourneyCardData {
   items: AffiliateJourneyListItem[];
 }
 
+interface AffiliateStageOverviewExpert {
+  id: string;
+  expertName: string;
+  expertCode: string;
+  status: string;
+  url: string | null;
+  isClosed: boolean;
+  isOverdue: boolean;
+}
+
+interface AffiliateStageOverviewCard {
+  key: string;
+  label: string;
+  sourceLabel: string;
+  total: number;
+  open: number;
+  closed: number;
+  overdue: number;
+  accent: string;
+  experts: AffiliateStageOverviewExpert[];
+}
+
+interface AffiliateJourneySummaryCard {
+  key: string;
+  label: string;
+  sourceLabel: string;
+  totalTasks: number;
+  listCount: number;
+  open: number;
+  closed: number;
+  overdue: number;
+  accent: string;
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 const ASSIGNEE_ACCENT_PALETTE = [
   "#7dd3fc",
@@ -477,6 +513,14 @@ const AFFILIATE_STAGE_DEFINITIONS: AffiliateStageDefinition[] = [
   },
 ];
 
+const AFFILIATE_STAGE_ACCENT_MAP: Record<string, string> = {
+  acquisition: "#f59e0b",
+  compliance: "#a78bfa",
+  contract: "#f97316",
+  accountCreation: "#22d3ee",
+  creationFlow: "#84cc16",
+};
+
 const AFFILIATE_JOURNEY_FOLDER_DEFINITIONS: AffiliateJourneyFolderDefinition[] = [
   {
     key: "commercial",
@@ -519,6 +563,14 @@ const AFFILIATE_JOURNEY_FOLDER_DEFINITIONS: AffiliateJourneyFolderDefinition[] =
     matchers: ["controle"],
   },
 ];
+
+const AFFILIATE_JOURNEY_ACCENT_MAP: Record<string, string> = {
+  commercial: "#f59e0b",
+  approvalContract: "#a78bfa",
+  contractManagement: "#f97316",
+  followup: "#22d3ee",
+  analysis: "#60a5fa",
+};
 
 const parseDateMs = (value: string | null | undefined): number | null => {
   if (!value) return null;
@@ -2073,12 +2125,85 @@ function NativeDashboardApp() {
     () => buildAffiliateJourneyCards(navigationTree, pipelineBlocks),
     [navigationTree, pipelineBlocks]
   );
+  const affiliateStageOverview = useMemo<AffiliateStageOverviewCard[]>(
+    () =>
+      affiliateStatusBoard.columns.map((column) => {
+        const experts = affiliateStatusBoard.rows
+          .map((row) => {
+            const cell = row.cells[column.key];
+            if (!cell) return null;
+
+            return {
+              id: `${row.id}:${column.key}`,
+              expertName: row.expertName,
+              expertCode: row.expertCode,
+              status: cell.status,
+              url: cell.url || row.hubUrl,
+              isClosed: cell.isClosed,
+              isOverdue: cell.isOverdue,
+            };
+          })
+          .filter((item): item is AffiliateStageOverviewExpert => Boolean(item))
+          .sort((left, right) => {
+            if (Number(right.isOverdue) !== Number(left.isOverdue)) {
+              return Number(right.isOverdue) - Number(left.isOverdue);
+            }
+            if (Number(left.isClosed) !== Number(right.isClosed)) {
+              return Number(left.isClosed) - Number(right.isClosed);
+            }
+            return left.expertName.localeCompare(right.expertName, "pt-BR");
+          });
+
+        const open = experts.filter((item) => !item.isClosed).length;
+        const closed = experts.filter((item) => item.isClosed).length;
+        const overdue = experts.filter((item) => item.isOverdue).length;
+        const accentSource = experts.find((item) => item.isOverdue)?.status || experts[0]?.status || column.label;
+
+        return {
+          key: column.key,
+          label: column.label,
+          sourceLabel: column.sourceLabel,
+          total: experts.length,
+          open,
+          closed,
+          overdue,
+          accent: AFFILIATE_STAGE_ACCENT_MAP[column.key] || stageColor(accentSource),
+          experts,
+        };
+      }),
+    [affiliateStatusBoard.columns, affiliateStatusBoard.rows]
+  );
   const affiliateJourneyListCount = useMemo(
     () => affiliateJourneyCards.reduce((sum, card) => sum + card.listCount, 0),
     [affiliateJourneyCards]
   );
   const affiliateJourneyTaskTotal = useMemo(
     () => affiliateJourneyCards.reduce((sum, card) => sum + card.totalTasks, 0),
+    [affiliateJourneyCards]
+  );
+  const affiliateJourneySummaries = useMemo<AffiliateJourneySummaryCard[]>(
+    () =>
+      affiliateJourneyCards.map((card) => {
+        const items = [...card.items].sort((left, right) => {
+          if (right.overdue !== left.overdue) return right.overdue - left.overdue;
+          if (right.open !== left.open) return right.open - left.open;
+          return right.taskCount - left.taskCount;
+        });
+
+        return {
+          key: card.key,
+          label: card.label,
+          sourceLabel: card.sourceLabel,
+          totalTasks: card.totalTasks,
+          listCount: card.listCount,
+          open: items.reduce((sum, item) => sum + item.open, 0),
+          closed: items.reduce((sum, item) => sum + item.closed, 0),
+          overdue: items.reduce((sum, item) => sum + item.overdue, 0),
+          accent:
+            AFFILIATE_JOURNEY_ACCENT_MAP[card.key] ||
+            ASSIGNEE_ACCENT_PALETTE[resolveStablePaletteIndex(card.key)],
+        };
+      }),
     [affiliateJourneyCards]
   );
 
@@ -2897,47 +3022,56 @@ function NativeDashboardApp() {
           )}
         </section>
 
-        <section className={`${activeView === "resumo" ? "grid" : "hidden"} gap-4 lg:grid-cols-2 2xl:grid-cols-3`}>
-          <Panel title="Experts em movimento" subtitle="frentes ativas na esteira" helpText={HELP_TEXT.panelExpertFlow}>
-            <div className="chart-box chart-box-cyan h-[220px] sm:h-[280px] xl:h-[300px]">
-              {expertMovementDataset.length ? (
-                <HorizontalBarChartKpi
-                  data={expertMovementDataset}
-                  barColor="#00f3ff"
-                  countLabel="Experts"
-                />
-              ) : (
-                <EmptyData message="Sem experts ativos na esteira" />
-              )}
-            </div>
-          </Panel>
-          <Panel title="Processos em movimento" subtitle="volume atual por frente" helpText={HELP_TEXT.panelProcessFlow}>
-            <div className="chart-box chart-box-rose h-[220px] sm:h-[280px] xl:h-[300px]">
-              {processMovementDataset.length ? (
-                <HorizontalBarChartKpi
-                  data={processMovementDataset}
-                  barColor="#ff5f87"
-                  countLabel="Processos"
-                />
-              ) : (
-                <EmptyData message="Sem processos ativos no momento" />
-              )}
-            </div>
-          </Panel>
-          <Panel title="Esteira por etapa" subtitle="concentracao atual do fluxo" helpText={HELP_TEXT.panelStageFlow}>
-            <div className="chart-box chart-box-violet h-[220px] sm:h-[280px] xl:h-[300px]">
-              {stageMovementDataset.length ? (
-                <HorizontalBarChartKpi
-                  data={stageMovementDataset}
-                  barColor="#a68dff"
-                  countLabel="Etapas"
-                />
-              ) : (
-                <EmptyData message="Sem etapas mapeadas na esteira" />
-              )}
-            </div>
-          </Panel>
-        </section>
+        {hasAffiliateStatusBoard ? (
+          <section className={`${activeView === "resumo" ? "grid" : "hidden"} gap-4`}>
+            <PipelineMovementMiniDashboard
+              stages={affiliateStageOverview}
+              processes={affiliateJourneySummaries}
+            />
+          </section>
+        ) : (
+          <section className={`${activeView === "resumo" ? "grid" : "hidden"} gap-4 lg:grid-cols-2 2xl:grid-cols-3`}>
+            <Panel title="Experts em movimento" subtitle="frentes ativas na esteira" helpText={HELP_TEXT.panelExpertFlow}>
+              <div className="chart-box chart-box-cyan h-[220px] sm:h-[280px] xl:h-[300px]">
+                {expertMovementDataset.length ? (
+                  <HorizontalBarChartKpi
+                    data={expertMovementDataset}
+                    barColor="#00f3ff"
+                    countLabel="Experts"
+                  />
+                ) : (
+                  <EmptyData message="Sem experts ativos na esteira" />
+                )}
+              </div>
+            </Panel>
+            <Panel title="Processos em movimento" subtitle="volume atual por frente" helpText={HELP_TEXT.panelProcessFlow}>
+              <div className="chart-box chart-box-rose h-[220px] sm:h-[280px] xl:h-[300px]">
+                {processMovementDataset.length ? (
+                  <HorizontalBarChartKpi
+                    data={processMovementDataset}
+                    barColor="#ff5f87"
+                    countLabel="Processos"
+                  />
+                ) : (
+                  <EmptyData message="Sem processos ativos no momento" />
+                )}
+              </div>
+            </Panel>
+            <Panel title="Esteira por etapa" subtitle="concentracao atual do fluxo" helpText={HELP_TEXT.panelStageFlow}>
+              <div className="chart-box chart-box-violet h-[220px] sm:h-[280px] xl:h-[300px]">
+                {stageMovementDataset.length ? (
+                  <HorizontalBarChartKpi
+                    data={stageMovementDataset}
+                    barColor="#a68dff"
+                    countLabel="Etapas"
+                  />
+                ) : (
+                  <EmptyData message="Sem etapas mapeadas na esteira" />
+                )}
+              </div>
+            </Panel>
+          </section>
+        )}
 
         <section className={`${activeView === "kanban" ? "panel-rise" : "hidden"} border border-cyan-500/12 bg-black/25 p-4 md:p-6`}>
           <div className="flex flex-wrap items-end justify-between gap-3">
@@ -3318,6 +3452,326 @@ function Panel({
       </div>
       <div className="relative">{children}</div>
     </section>
+  );
+}
+
+function PipelineMovementMiniDashboard({
+  stages,
+  processes,
+}: {
+  stages: AffiliateStageOverviewCard[];
+  processes: AffiliateJourneySummaryCard[];
+}) {
+  const totalExperts = new Set(
+    stages.flatMap((stage) => stage.experts.map((expert) => expert.expertCode || expert.expertName))
+  ).size;
+  const totalOpen = stages.reduce((sum, stage) => sum + stage.open, 0);
+  const totalClosed = stages.reduce((sum, stage) => sum + stage.closed, 0);
+  const totalOverdue = stages.reduce((sum, stage) => sum + stage.overdue, 0);
+  const activeStageCount = stages.filter((stage) => stage.total > 0).length;
+  const dominantStage = [...stages].sort((left, right) => right.open - left.open)[0] || null;
+  const processOpenTotal = processes.reduce((sum, process) => sum + process.open, 0);
+  const processClosedTotal = processes.reduce((sum, process) => sum + process.closed, 0);
+  const processOverdueTotal = processes.reduce((sum, process) => sum + process.overdue, 0);
+  const processTotalTasks = processes.reduce((sum, process) => sum + process.totalTasks, 0);
+  const stageComposition = stages
+    .filter((stage) => stage.open > 0)
+    .map((stage) => ({
+      ...stage,
+      pct: totalOpen > 0 ? Number(((stage.open / totalOpen) * 100).toFixed(1)) : 0,
+    }));
+
+  return (
+    <Panel
+      title="Mini Dash da Esteira"
+      subtitle="leitura estrategica da esteira com numeros grandes, composicao e processos da jornada"
+      helpText={HELP_TEXT.miniPipelineDashboard}
+    >
+      <div className="flex flex-wrap gap-2">
+        <span className="rounded border border-cyan-500/35 bg-cyan-500/12 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-cyan-300">
+          Experts na esteira: {totalExperts}
+        </span>
+        <span className="rounded border border-blue-500/25 bg-blue-500/10 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-blue-300">
+          Frentes abertas: {totalOpen}
+        </span>
+        <span className="rounded border border-rose-500/25 bg-rose-500/10 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-rose-300">
+          Frentes atrasadas: {totalOverdue}
+        </span>
+        <span className="rounded border border-white/20 bg-white/5 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-slate-300">
+          Etapas ativas: {activeStageCount} // Processos: {processes.length}
+        </span>
+      </div>
+
+      <div className="mt-5 grid gap-4 xl:grid-cols-[1.7fr_1fr]">
+        <div>
+          <div className="flex items-center gap-2">
+            <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-cyan-300/80">Etapas dos experts</p>
+            <InlineHint text="Cada card mostra a quantidade aberta por etapa principal da esteira, com leitura executiva e sem listar tarefas." />
+          </div>
+          <div className="mt-3 grid gap-3 min-[560px]:grid-cols-2 2xl:grid-cols-3">
+            {stages.map((stage) => (
+              <article
+                key={stage.key}
+                className="min-w-0 overflow-hidden rounded border border-white/10 bg-black/30 p-4"
+                style={{ boxShadow: `inset 0 2px 0 ${stage.accent}` }}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-slate-500">{stage.sourceLabel}</p>
+                    <h3 className="mt-1 break-words font-display text-lg font-semibold text-slate-100">{stage.label}</h3>
+                  </div>
+                  <span
+                    className={`inline-flex rounded border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.1em] ${
+                      stage.overdue > 0
+                        ? "border-rose-500/25 bg-rose-500/10 text-rose-200"
+                        : "border-emerald-500/20 bg-emerald-500/10 text-emerald-200"
+                    }`}
+                  >
+                    {stage.overdue} atr
+                  </span>
+                </div>
+
+                <div className="mt-7 text-center">
+                  <p className="font-display text-[56px] font-semibold leading-none text-slate-50">{stage.open}</p>
+                  <p className="mt-3 font-mono text-[11px] uppercase tracking-[0.14em] text-slate-400">experts em aberto</p>
+                </div>
+
+                <div className="mt-6 grid grid-cols-3 gap-2">
+                  <div className="rounded border border-white/10 bg-black/20 px-2 py-2 text-center">
+                    <p className="font-mono text-[9px] uppercase tracking-[0.1em] text-slate-500">base</p>
+                    <p className="mt-1 font-display text-lg font-semibold text-slate-100">{stage.total}</p>
+                  </div>
+                  <div className="rounded border border-white/10 bg-black/20 px-2 py-2 text-center">
+                    <p className="font-mono text-[9px] uppercase tracking-[0.1em] text-slate-500">fechadas</p>
+                    <p className="mt-1 font-display text-lg font-semibold text-slate-100">{stage.closed}</p>
+                  </div>
+                  <div className="rounded border border-white/10 bg-black/20 px-2 py-2 text-center">
+                    <p className="font-mono text-[9px] uppercase tracking-[0.1em] text-slate-500">abertas</p>
+                    <p className="mt-1 font-display text-lg font-semibold text-slate-100">{stage.open}</p>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+        </div>
+
+        <article className="min-w-0 overflow-hidden rounded border border-white/10 bg-black/30 p-4">
+          <div className="flex items-center gap-2">
+            <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-cyan-300/80">Composicao da esteira</p>
+            <InlineHint text="Resumo consolidado das frentes abertas, base fechada e concentracao atual por etapa." />
+          </div>
+
+          <div className="mt-5 flex min-h-[168px] flex-col items-center justify-center rounded border border-white/10 bg-black/20 px-4 py-5 text-center">
+            <p className="font-display text-[72px] font-semibold leading-none text-slate-50">{totalOpen}</p>
+            <p className="mt-3 font-mono text-[11px] uppercase tracking-[0.14em] text-slate-400">frentes abertas</p>
+            <p className="mt-2 text-sm text-slate-500">
+              {dominantStage ? `${dominantStage.label} lidera com ${dominantStage.open}` : "Sem concentracao ativa"}
+            </p>
+          </div>
+
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <div className="rounded border border-cyan-500/20 bg-cyan-500/10 px-3 py-2">
+              <p className="font-mono text-[9px] uppercase tracking-[0.1em] text-cyan-200">experts unicos</p>
+              <p className="mt-1 font-display text-2xl font-semibold text-slate-50">{totalExperts}</p>
+            </div>
+            <div className="rounded border border-emerald-500/20 bg-emerald-500/10 px-3 py-2">
+              <p className="font-mono text-[9px] uppercase tracking-[0.1em] text-emerald-200">frentes fechadas</p>
+              <p className="mt-1 font-display text-2xl font-semibold text-slate-50">{totalClosed}</p>
+            </div>
+            <div className="rounded border border-rose-500/20 bg-rose-500/10 px-3 py-2">
+              <p className="font-mono text-[9px] uppercase tracking-[0.1em] text-rose-200">frentes atrasadas</p>
+              <p className="mt-1 font-display text-2xl font-semibold text-slate-50">{totalOverdue}</p>
+            </div>
+            <div className="rounded border border-violet-500/20 bg-violet-500/10 px-3 py-2">
+              <p className="font-mono text-[9px] uppercase tracking-[0.1em] text-violet-200">processos ativos</p>
+              <p className="mt-1 font-display text-2xl font-semibold text-slate-50">{processOpenTotal}</p>
+            </div>
+          </div>
+
+          <div className="mt-5 overflow-hidden rounded-full border border-white/10 bg-white/5">
+            <div className="flex h-4 w-full">
+              {stageComposition.length ? (
+                stageComposition.map((stage) => (
+                  <div
+                    key={`segment-${stage.key}`}
+                    title={`${stage.label}: ${stage.open}`}
+                    style={{
+                      flex: `${Math.max(stage.open, 1)} 1 0`,
+                      background: `linear-gradient(90deg, ${stage.accent}, ${stage.accent}cc)`,
+                    }}
+                  />
+                ))
+              ) : (
+                <div className="h-full w-full bg-white/5" />
+              )}
+            </div>
+          </div>
+
+          <div className="mt-4 space-y-2">
+            {stageComposition.length ? (
+              stageComposition.map((stage) => (
+                <div
+                  key={`legend-${stage.key}`}
+                  className="journey-stage-legend flex items-center justify-between gap-3 rounded border border-white/10 bg-black/20 px-3 py-2"
+                  style={
+                    {
+                      "--journey-stage-accent": stage.accent,
+                    } as CSSProperties
+                  }
+                >
+                  <div className="min-w-0">
+                    <div className="inline-flex items-center gap-2">
+                      <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: stage.accent }} />
+                      <p className="truncate font-mono text-[10px] uppercase tracking-[0.1em] text-slate-200">{stage.label}</p>
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <p className="font-display text-lg font-semibold" style={{ color: stage.accent }}>{stage.open}</p>
+                    <p className="font-mono text-[9px] uppercase tracking-[0.1em] text-slate-500">{stage.pct}%</p>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="rounded border border-dashed border-white/10 bg-white/5 px-3 py-4 font-mono text-[10px] uppercase tracking-[0.1em] text-slate-500">
+                sem distribuicao ativa agora
+              </div>
+            )}
+          </div>
+        </article>
+      </div>
+
+      <div className="mt-5">
+        <div className="flex items-center gap-2">
+          <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-cyan-300/80">Processos da jornada</p>
+          <InlineHint text="Cada card resume a pasta principal da jornada dos experts com foco em carga, concluidas e risco." />
+        </div>
+        <div className="mt-3 grid gap-3 min-[560px]:grid-cols-2 2xl:grid-cols-5">
+          {processes.map((process) => {
+            const completionPct =
+              process.totalTasks > 0 ? Math.round((process.closed / process.totalTasks) * 100) : 0;
+            const openPct =
+              process.totalTasks > 0 ? Number(((process.open / process.totalTasks) * 100).toFixed(1)) : 0;
+            const closedPct =
+              process.totalTasks > 0 ? Number(((process.closed / process.totalTasks) * 100).toFixed(1)) : 0;
+
+            return (
+            <article
+              key={process.key}
+              className="journey-process-card min-w-0 overflow-hidden rounded border border-white/10 bg-black/30 p-4"
+              style={
+                {
+                  "--journey-accent": process.accent,
+                  boxShadow: `inset 0 2px 0 ${process.accent}`,
+                } as CSSProperties
+              }
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-slate-500">{process.sourceLabel}</p>
+                  <h3 className="mt-1 break-words font-display text-[1.1rem] font-semibold text-slate-100">{process.label}</h3>
+                </div>
+                <div className="journey-process-badge shrink-0 text-right">
+                  <p className="font-display text-4xl font-semibold leading-none text-slate-50">{process.open}</p>
+                  <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.12em] text-slate-500">em aberto</p>
+                </div>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-1.5">
+                <span className="rounded border border-white/15 bg-white/5 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.1em] text-slate-300">
+                  {process.totalTasks} tarefas
+                </span>
+                <span className="rounded border border-cyan-500/20 bg-cyan-500/10 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.1em] text-cyan-200">
+                  {process.listCount} subpastas
+                </span>
+                <span
+                  className={`rounded border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.1em] ${
+                    process.overdue > 0
+                      ? "border-rose-500/25 bg-rose-500/10 text-rose-200"
+                      : "border-emerald-500/20 bg-emerald-500/10 text-emerald-200"
+                  }`}
+                >
+                  {process.overdue} atr
+                </span>
+                <span className="rounded border border-violet-500/20 bg-violet-500/10 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.1em] text-violet-200">
+                  {completionPct}% fechamento
+                </span>
+              </div>
+
+              <div className="journey-process-hero mt-4 rounded-2xl border border-white/10 bg-black/20 px-3 py-3">
+                <div className="flex items-end justify-between gap-3">
+                  <div>
+                    <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-slate-500">Fluxo principal</p>
+                    <p className="mt-2 font-display text-5xl font-semibold leading-none text-slate-50">{process.open}</p>
+                    <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.12em] text-slate-400">
+                      frentes abertas agora
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-slate-500">Concluidas</p>
+                    <p className="mt-2 font-display text-3xl font-semibold leading-none text-emerald-300">{process.closed}</p>
+                  </div>
+                </div>
+
+                <div className="mt-4">
+                  <div className="journey-process-progress">
+                    <div
+                      className="journey-process-progress-fill is-open"
+                      style={{ width: `${openPct}%` }}
+                    />
+                    <div
+                      className="journey-process-progress-fill is-closed"
+                      style={{ width: `${closedPct}%` }}
+                    />
+                  </div>
+                  <div className="mt-2 flex items-center justify-between gap-2 font-mono text-[9px] uppercase tracking-[0.1em] text-slate-500">
+                    <span>Abertas {openPct}%</span>
+                    <span>Concluidas {closedPct}%</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4 grid grid-cols-3 gap-2">
+                <div className="journey-process-kpi rounded border border-white/10 bg-black/20 px-2 py-2">
+                  <p className="font-mono text-[9px] uppercase tracking-[0.1em] text-slate-500">abertas</p>
+                  <p className="mt-1 font-display text-lg font-semibold text-slate-100">{process.open}</p>
+                </div>
+                <div className="journey-process-kpi rounded border border-white/10 bg-black/20 px-2 py-2">
+                  <p className="font-mono text-[9px] uppercase tracking-[0.1em] text-slate-500">concluidas</p>
+                  <p className="mt-1 font-display text-lg font-semibold text-slate-100">{process.closed}</p>
+                </div>
+                <div className="journey-process-kpi rounded border border-white/10 bg-black/20 px-2 py-2">
+                  <p className="font-mono text-[9px] uppercase tracking-[0.1em] text-slate-500">atrasadas</p>
+                  <p className="mt-1 font-display text-lg font-semibold text-slate-100">{process.overdue}</p>
+                </div>
+              </div>
+            </article>
+          );
+          })}
+        </div>
+        <div className="journey-summary-grid mt-4 grid gap-3 min-[560px]:grid-cols-2 xl:grid-cols-4">
+          <div className="journey-summary-card rounded border border-white/10 bg-black/20 px-4 py-3">
+            <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-slate-500">Processos em aberto</p>
+            <p className="mt-2 font-display text-4xl font-semibold text-slate-50">{processOpenTotal}</p>
+          </div>
+          <div className="journey-summary-card rounded border border-white/10 bg-black/20 px-4 py-3">
+            <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-slate-500">Processos atrasados</p>
+            <p className="mt-2 font-display text-4xl font-semibold text-slate-50">{processOverdueTotal}</p>
+          </div>
+          <div className="journey-summary-card rounded border border-white/10 bg-black/20 px-4 py-3">
+            <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-slate-500">Processos concluidos</p>
+            <p className="mt-2 font-display text-4xl font-semibold text-slate-50">
+              {processClosedTotal}
+            </p>
+          </div>
+          <div className="journey-summary-card rounded border border-white/10 bg-black/20 px-4 py-3">
+            <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-slate-500">Carga total</p>
+            <p className="mt-2 font-display text-4xl font-semibold text-slate-50">
+              {processTotalTasks}
+            </p>
+          </div>
+        </div>
+      </div>
+    </Panel>
   );
 }
 
